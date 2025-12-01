@@ -82,16 +82,16 @@ def get_config(
     second_model_weights_path = os.path.join(WEIGHTS_DIR, second_model_weights_filename)
     os.makedirs(WEIGHTS_DIR, exist_ok=True)
 
-    total_train_samples = int(
-        total_elements * train_ratio
-    )  # this adjusts the total samples for the training ratio
-    steps_per_epoch = (
-        total_train_samples // batch_size
-    )  # this calculates the number of steps per epoch
-    train_sequences = (
-        int(total_elements * train_ratio) - int(np.ceil(seqlen / 8))
-    ) // step
-    validation_steps = int(test_ratio * total_elements // batch_size)
+    # Calculate actual number of samples from the data
+    total_train_bits = int(total_elements * train_ratio * 8)
+    window_size = seqlen + target_bits
+    train_sequences = (total_train_bits - window_size) // step + 1 if total_train_bits > window_size else 0
+    
+    total_test_bits = int(total_elements * test_ratio * 8)
+    test_sequences = (total_test_bits - window_size) // step + 1 if total_test_bits > window_size else 0
+    
+    steps_per_epoch = train_sequences // batch_size
+    validation_steps = test_sequences // batch_size
 
     return {
         "filename": filename,

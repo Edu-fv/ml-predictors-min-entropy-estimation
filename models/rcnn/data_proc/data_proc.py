@@ -18,6 +18,7 @@ def bytes_to_bits(bytes_arr):
 def data_generator(config, epochs=1, start=0.0, end=1.0):
     """
     Vectorized data generator for RCNN model training.
+    Yields exactly batch_size samples per batch (except possibly the last batch).
     
     X = bits[i*step : i*step + seqlen]  
     y = bits[i*step + seqlen : i*step + seqlen + target_bits]
@@ -25,9 +26,18 @@ def data_generator(config, epochs=1, start=0.0, end=1.0):
     target_bits = config["target_bits"]
     seqlen = config["seqlen"]
     step = config["step"]
+    batch_size = config["batch_size"]
     num_y_classes = 2 ** target_bits
     powers = 2 ** np.arange(target_bits - 1, -1, -1)
     window_size = seqlen + target_bits
+    
+    # Calculate bytes needed to generate exactly batch_size samples
+    bits_needed = (batch_size - 1) * step + window_size
+    bytes_needed = int(np.ceil(bits_needed / 8))
+    
+    # Byte step to advance without overlap (based on samples consumed)
+    bits_consumed_per_batch = batch_size * step
+    byte_step = int(np.ceil(bits_consumed_per_batch / 8))
     
     epoch_count = 0
     while epoch_count < epochs:
@@ -41,21 +51,23 @@ def data_generator(config, epochs=1, start=0.0, end=1.0):
             start_pos = int(start * config["num_bytes"])
             end_pos = int(end * config["num_bytes"])
 
-            for batch_start in range(start_pos, end_pos, config["batch_size"]):
-                batch_end = min(batch_start + config["batch_size"], end_pos)
+            batch_start = start_pos
+            while batch_start < end_pos:
+                batch_end = min(batch_start + bytes_needed, end_pos)
                 mapped_data = bytes_to_bits(mapped_file[batch_start:batch_end])
                 data_len = len(mapped_data)
 
                 n = (data_len - window_size) // step + 1
                 if n <= 0:
+                    batch_start += byte_step
                     continue
                 
-                # Build X: one-hot encoded input sequences
+                n = min(n, batch_size)
+                
                 x_indices = np.arange(n)[:, None] * step + np.arange(seqlen)
                 X = np.zeros((n, seqlen, 2), dtype=bool)
                 X[np.arange(n)[:, None], np.arange(seqlen), mapped_data[x_indices]] = True
                 
-                # Build y: one-hot encoded target classes
                 y_start = np.arange(n) * step + seqlen
                 y_bit_indices = y_start[:, None] + np.arange(target_bits)
                 y_class_indices = np.dot(mapped_data[y_bit_indices], powers)
@@ -63,6 +75,8 @@ def data_generator(config, epochs=1, start=0.0, end=1.0):
                 y[np.arange(n), y_class_indices] = True
 
                 yield X, y
+                
+                batch_start += byte_step
 
         epoch_count += 1
 
