@@ -102,18 +102,14 @@ def evaluate_model(model, config):
     n_true = 0
     n_zeroes = 0
     n_total = 0
-    interval = 10000  # interval to monitor system usage
-    count = 0  # counter for the monitoring interval
     all_binary_predictions = []
 
     total_cross_entropy = 0
     loss_fn = BinaryCrossentropy(from_logits=False)
 
     for i in range(config["validation_steps"]):
-        start_loop = timer()
         Xt, yt = next(eval_gen)
-        # Convert the numpy array Xt to tensor
-        Xt_tensor = tf.convert_to_tensor(Xt, dtype=tf.bool)
+        Xt_tensor = tf.convert_to_tensor(Xt, dtype=tf.float32)
         preds = model(Xt_tensor)
         predictions = np.argmax(preds, axis=-1)
         evaluation_data = np.argmax(yt, axis=-1)
@@ -123,23 +119,6 @@ def evaluate_model(model, config):
         n_total += preds.shape[0]
         cross_entropy = loss_fn(yt, preds)
         total_cross_entropy += cross_entropy.numpy()
-
-        # monitor system usage every 'interval' steps
-        if count % interval == 0:
-            percentage_elapsed = (i + 1) / config["validation_steps"] * 100
-            cpu_percentages = psutil.cpu_percent(interval=1.0, percpu=True)
-            nice_log(f"Step: {count}")
-            nice_log(f"Percentage elapsed: {percentage_elapsed:.2f}")
-            nice_log(
-                f"Average CPU usage across cores: {(sum(cpu_percentages) / len(cpu_percentages)):.2f}"
-            )
-            nice_log(
-                f"Memory usage (GB): {(process.memory_info().rss / (1024 ** 3)):.2f}"
-            )
-            nice_log(f"Number of threads: {process.num_threads()}")
-            nice_log(f"Time elapsed (seconds): {timer()- start_loop:.1f} seconds")
-
-        count += 1
 
     p_ml = n_true / n_total
     p_g = 1 / 2 ** config["target_bits"]
@@ -154,8 +133,10 @@ def evaluate_model(model, config):
 
     average_cross_entropy = total_cross_entropy / config["validation_steps"]
 
+    evaluation_time = float(timer() - start) / 60
+
     results = {
-        "training_time": float(timer() - start) / 60,
+        "evaluation_time": evaluation_time,
         "P_ML": p_ml,
         "P_g": p_g,
         "P_c": p_c,
@@ -164,8 +145,8 @@ def evaluate_model(model, config):
     }
 
     nice_log(
-        f"EVALUATION RESULTS: Time taken: {float(timer()-start)/60:.1f} minutes, P_ML = {p_ml:.5f}, P_g = {p_g:.5f}, P_c = {p_c:.5f},"
-        f"Predictions Entropy = {overall_entropy:.5f}, Binary Cross-Entropy Loss = {average_cross_entropy:.5f}"
+        f"Evaluation completed in {evaluation_time:.2f} minutes - P_ML: {p_ml:.5f}, P_g: {p_g:.5f}, P_c: {p_c:.5f}, "
+        f"Predictions Entropy: {overall_entropy:.5f}, Cross-Entropy Loss: {average_cross_entropy:.5f}"
     )
     return results
 
@@ -265,10 +246,10 @@ def train_model(model, config, evaluation_checkpoints, first_model=None):
         
         # End of epoch summary
         if num_batches > 0:
-            nice_log(f"Epoch {epoch + 1} completed. Avg Loss: {epoch_loss / num_batches:.4f}, Total batches: {num_batches}")
+            nice_log(f"Epoch {epoch + 1} completed - Avg Loss: {epoch_loss / num_batches:.4f}, Total batches: {num_batches}")
 
     training_time = float(timer() - start) / 60
-    nice_log(f"Training time: {training_time:.1f} minutes")
+    nice_log(f"Training completed in {training_time:.2f} minutes")
     return model, training_time, partial_evals
 
 
@@ -327,11 +308,11 @@ def main(
     # Save weights after training
     model.save_weights(config["weights_path"])
 
-    nice_log("Evaluating first model...")
+    nice_log("Starting evaluation...")
     partial_evals = evaluate_and_record(model, config, num_bytes, partial_evals)
 
     output_dict = {
-        "training_time": "-" if training_time is None else f"{training_time:.1f}",
+        "training_time": training_time,
         "eval_results": partial_evals,
         "total_parameters": model_parameters[0],
         "trainable_parameters": model_parameters[1],

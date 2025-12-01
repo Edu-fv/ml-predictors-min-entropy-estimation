@@ -146,6 +146,7 @@ def train_model(
             epoch_loss += loss.item()
 
     training_time = float(timer() - start) / 60
+    nice_log(f"Training completed in {training_time:.2f} minutes")
     return training_time, partial_evals
 
 
@@ -219,8 +220,10 @@ def evaluate_model(model, config, data, device, target_bits=1):
     p_c_zeroes = n_zeroes / (total // 2)
     p_c = max(p_c_zeroes, 1 - p_c_zeroes)
 
+    evaluation_time = float(timer() - start) / 60
+
     results = {
-        "training_time": float(timer() - start) / 60,
+        "evaluation_time": evaluation_time,
         "P_ML": p_ml,
         "P_g": p_g,
         "P_c": p_c,
@@ -228,7 +231,8 @@ def evaluate_model(model, config, data, device, target_bits=1):
         "bin_cross-entropy_loss": average_cross_entropy,
     }
     nice_log(
-        f"EVALUATION RESULTS: Time taken: {float(timer()-start)/60:.1f} minutes, P_ML = {p_ml:.5f}, P_g= {p_g:.5f}, P_c = {p_c:.5f}, Predictions Entropy: {overall_entropy:.5f}, Binary Cross-Entropy Loss: {average_cross_entropy:.5f}"
+        f"Evaluation completed in {evaluation_time:.2f} minutes - P_ML: {p_ml:.5f}, P_g: {p_g:.5f}, P_c: {p_c:.5f}, "
+        f"Predictions Entropy: {overall_entropy:.5f}, Cross-Entropy Loss: {average_cross_entropy:.5f}"
     )
 
     return results
@@ -294,6 +298,7 @@ def main(
     # Save model
     save_model(model, config["weights_path"])
     # Final evaluation
+    nice_log("Starting evaluation...")
     eval_results = evaluate_model(
         model, config, eval_data, device, target_bits=target_bits
     )
@@ -308,7 +313,7 @@ def main(
         int(num_bytes * train_ratio) - int(np.ceil(seqlen / 8))
     ) // step
     output_dict = {
-        "training_time": "-" if training_time is None else f"{training_time:.1f}",
+        "training_time": training_time,
         "eval_results": partial_evals,
         "total_parameters": model_parameters[0],
         "trainable_parameters": model_parameters[1],

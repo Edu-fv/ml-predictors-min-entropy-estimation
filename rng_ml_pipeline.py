@@ -285,10 +285,16 @@ def main(model_param_dict, data_param_dict, model_name, hardware):
                 eval_result["P_ML"], target_bits
             )
 
+            # Format times consistently (in minutes, 2 decimal places)
+            training_time = run_constant_info.get("training_time")
+            evaluation_time = eval_result.get("evaluation_time")
+            
             output_dict = {
                 **constant_dict,
                 **run_constant_info,
                 **eval_result,
+                "training_time": f"{training_time:.2f}" if training_time is not None else "-",
+                "evaluation_time": f"{evaluation_time:.2f}" if evaluation_time is not None else "-",
                 "bytes_processed_eval": bytes_processed_eval,
                 "min_entropy_estimated": min_entropy_estimated,
             }
