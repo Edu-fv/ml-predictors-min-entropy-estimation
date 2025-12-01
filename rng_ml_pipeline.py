@@ -169,40 +169,47 @@ def generate_evaluation_checkpoints(start_order, end_order, num_points_per_order
     return evaluation_checkpoints
 
 
-def execute_model(model_name, model_param_dict):
-    # Dynamical imports to avoid conflict between torch and tensorflow
+def get_model_runner(model_name):
+    """
+    Imports the specific model module and returns a runner function
+    that adapts the parameters and executes the model.
+    """
     if model_name == "gpt2":
         from models.gpt2 import rng_gpt2 as model
 
-        if model_param_dict["batch_size"] is None:
-            model_param_dict["batch_size"] = 8
+        def runner(params):
+            run_params = params.copy()
+            if run_params.get("batch_size") is None:
+                run_params["batch_size"] = 8
+            run_params["model_size_parameters"] = {
+                "n_positions": run_params["seqlen"],
+                "n_ctx": run_params["seqlen"],
+                "n_embd": 768,
+                "n_layer": 12,
+                "n_head": 12,
+            }
+            return model.main(**run_params)
 
-        model_param_dict["model_size_parameters"] = {
-            "n_positions": model_param_dict["seqlen"],
-            "n_ctx": model_param_dict["seqlen"],
-            "n_embd": 768,
-            "n_layer": 12,
-            "n_head": 12,
-        }
+        return runner
+
     elif model_name == "rcnn":
-        is_autoregressive = model_param_dict.pop("is_autoregressive", False)
-        evaluate_all_bits = model_param_dict.pop("evaluate_all_bits", False)
         from models.rcnn import rng_rcnn as model
 
-        if model_param_dict["batch_size"] is None:
-            model_param_dict["batch_size"] = 2 * 10**3
+        def runner(params):
+            run_params = params.copy()
+            # Remove keys not expected by RCNN main
+            run_params.pop("is_autoregressive", None)
+            run_params.pop("evaluate_all_bits", None)
 
-        model_param_dict["model_size_parameters"] = dict(scale_factor=2)
-        
-        result = model.main(**model_param_dict)
-        # Restore the keys for use in create_constant_dict
-        model_param_dict["is_autoregressive"] = is_autoregressive
-        model_param_dict["evaluate_all_bits"] = evaluate_all_bits
-        return result
+            if run_params.get("batch_size") is None:
+                run_params["batch_size"] = 2 * 10**3
+
+            run_params["model_size_parameters"] = dict(scale_factor=2)
+            return model.main(**run_params)
+
+        return runner
     else:
-        raise ValueError("Unknown model name.")
-
-    return model.main(**model_param_dict)
+        raise ValueError(f"Unknown model name: {model_name}")
 
 
 def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0):
@@ -225,6 +232,9 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
     data_target_file = f"{results_dir}/random_bytes.bin"
     sample_target_file = f"{results_dir}/random_bytes_sample.bin"
     model_param_dict["filename"] = data_target_file
+
+    # Get the model runner (loads model module once)
+    model_runner = get_model_runner(model_name)
 
     # Calculate total number of runs to determine if cooldown is needed
     total_runs = len(data_param_dict["target_bits"]) * len(data_param_dict["corr_intensities"])
@@ -254,7 +264,7 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
         )
 
         # Run the model in the main thread
-        ml_results = execute_model(model_name, model_param_dict)
+        ml_results = model_runner(model_param_dict)
 
         # Wait for NIST assessment to finish and get output
         stdout, stderr = nist_process.communicate()
