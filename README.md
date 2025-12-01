@@ -122,6 +122,7 @@ nohup python rng_ml_pipeline.py --num_bytes 10000000 --target_bits 1 2 3 4 5 6 7
 - `--autocorrelation_function`: This sets the autocorrelation function. Default is 'point-to-point'. Possible values: 'exponential', 'gaussian', 'point-to-point', 'constant'.
 - `--is_autoregressive`: Activates the autoregressive mode when set. In this mode, the model generates each bit in the sequence based on the previously generated bits. By default, this mode is disabled (False).
 - `--evaluate_all_bits`: When enabled, the evaluation of the model will consider all bits in the sequence. This is useful for a detailed analysis of the model's performance across the entire bit sequence. By default, this is disabled (False).
+- `--gpu_cooldown`: Seconds to wait between runs for GPU cooldown. Default is 0 (no waiting). Use a value like 180 for experimental runs with multiple `target_bits` or `corr_intensities` to prevent GPU overheating. The cooldown is automatically skipped when there is only one run.
 
 ### Variable ```target_bits```
 

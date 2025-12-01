@@ -205,7 +205,7 @@ def execute_model(model_name, model_param_dict):
     return model.main(**model_param_dict)
 
 
-def main(model_param_dict, data_param_dict, model_name, hardware):
+def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0):
     output_dict = dict()
     print("-----------------------------------")
     formatted_params = "\n".join(
@@ -226,6 +226,9 @@ def main(model_param_dict, data_param_dict, model_name, hardware):
     sample_target_file = f"{results_dir}/random_bytes_sample.bin"
     model_param_dict["filename"] = data_target_file
 
+    # Calculate total number of runs to determine if cooldown is needed
+    total_runs = len(data_param_dict["target_bits"]) * len(data_param_dict["corr_intensities"])
+    
     # iterate over all pairs of corr_intensity and target_bits without repetition
     for target_bits, corr_intensity in itertools.product(
         data_param_dict["target_bits"], data_param_dict["corr_intensities"]
@@ -304,7 +307,9 @@ def main(model_param_dict, data_param_dict, model_name, hardware):
         os.remove(data_target_file)
         os.remove(sample_target_file)
 
-        time.sleep(180)
+        # Only sleep between runs if there are multiple runs and cooldown is set
+        if gpu_cooldown > 0 and total_runs > 1:
+            time.sleep(gpu_cooldown)
 
     nice_log(f"Finished running model *** {model_name} ***", color="green")
 
@@ -378,6 +383,12 @@ def parse_arguments():
         "--evaluate_all_bits",
         action="store_true",
         help="Evaluate all bits (default: False)",
+    )
+    parser.add_argument(
+        "--gpu_cooldown",
+        type=int,
+        default=0,
+        help="Seconds to wait between runs for GPU cooldown (default: 0, use 180 for production)",
     )
     args = parser.parse_args()
 
@@ -496,4 +507,5 @@ if __name__ == "__main__":
         data_param_dict,
         args.model_name,
         args.hardware,
+        gpu_cooldown=args.gpu_cooldown,
     )
