@@ -31,6 +31,8 @@ We have tested this in a system with the following specifications:
 
 - Debian GNU/Linux 11 (bullseye)
 - RTX 3090Ti GPU
+- Python 3.12
+- CUDA 12.1
 
 ### With conda
 
@@ -44,11 +46,11 @@ bash Miniconda3-py38_23.5.2-0-Linux-x86_64.sh
 Create virtual environment and install dependencies
 
 ```bash
-conda create -n .rng_ml_pipeline-venv python=3.9
+conda create -n .rng_ml_pipeline-venv python=3.12
 conda activate .rng_ml_pipeline-venv
 conda config --add channels conda-forge
 conda config --set solver libmamba
-conda install --file requirements.txt  -c pytorch -c nvidia
+conda install --file requirements.txt -c pytorch -c nvidia
 ```
 
 ## RCNN model
