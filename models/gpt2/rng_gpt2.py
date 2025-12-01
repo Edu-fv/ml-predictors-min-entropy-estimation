@@ -201,24 +201,24 @@ def evaluate_model(model, config, data, device, target_bits=1):
 
             all_binary_predictions.append(binary_predictions)
 
-            # Counting zeroes
-            n_zeroes += (y == 0).sum().item()
-
             # Compute the cross-entropy loss for this mini-batch
             total_cross_entropy += loss.item()
 
     concatenated_binary_predictions = torch.cat(all_binary_predictions, dim=0)
-    p_zeroes = (
-        concatenated_binary_predictions == 0
-    ).sum().float() / concatenated_binary_predictions.numel()
+    
+    # P_c: count zeros at the bit level (binary_predictions are already bits)
+    n_zeroes = (concatenated_binary_predictions == 0).sum().item()
+    total_bits = concatenated_binary_predictions.numel()
+    p_c_zeroes = n_zeroes / total_bits
+    p_c = max(p_c_zeroes, 1 - p_c_zeroes)
+    
+    p_zeroes = n_zeroes / total_bits  # Same calculation, reuse
     overall_entropy = binary_entropy(p_zeroes)
 
     average_cross_entropy = total_cross_entropy / len(data)
 
     p_ml = correct / total
     p_g = 1 / (2**target_bits)
-    p_c_zeroes = n_zeroes / total
-    p_c = max(p_c_zeroes, 1 - p_c_zeroes)
 
     evaluation_time = float(timer() - start) / 60
 

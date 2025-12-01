@@ -100,9 +100,8 @@ def evaluate_model(model, config):
 
     eval_gen = data_generator(config, start=config["train_ratio"])
     n_true = 0
-    n_zeroes = 0
     n_total = 0
-    all_binary_predictions = []
+    all_predictions = []
 
     total_cross_entropy = 0
     loss_fn = BinaryCrossentropy(from_logits=False)
@@ -113,22 +112,26 @@ def evaluate_model(model, config):
         preds = model(Xt_tensor)
         predictions = np.argmax(preds, axis=-1)
         evaluation_data = np.argmax(yt, axis=-1)
-        all_binary_predictions.append(predictions)
+        all_predictions.append(predictions)
         n_true += np.sum(predictions == evaluation_data)
-        n_zeroes += np.sum(evaluation_data == 0)
         n_total += preds.shape[0]
         cross_entropy = loss_fn(yt, preds)
         total_cross_entropy += cross_entropy.numpy()
 
     p_ml = n_true / n_total
     p_g = 1 / 2 ** config["target_bits"]
-    p_c = max(n_zeroes / n_total, 1 - (n_zeroes / n_total))
-
-    concatenated_binary_predictions = np.concatenate(all_binary_predictions, axis=0)
-    p_zeroes = (
-        np.sum(concatenated_binary_predictions == 0)
-        / concatenated_binary_predictions.size
-    )
+    
+    # Convert class indices to binary to count zeros at bit level
+    concatenated_predictions = np.concatenate(all_predictions, axis=0)
+    target_bits = config["target_bits"]
+    # Convert each class index to its binary representation
+    binary_matrix = ((concatenated_predictions[:, None] >> np.arange(target_bits - 1, -1, -1)) & 1)
+    total_bits = binary_matrix.size
+    n_zeroes = np.sum(binary_matrix == 0)
+    p_c_zeroes = n_zeroes / total_bits
+    p_c = max(p_c_zeroes, 1 - p_c_zeroes)
+    
+    p_zeroes = n_zeroes / total_bits
     overall_entropy = binary_entropy(p_zeroes)
 
     average_cross_entropy = total_cross_entropy / config["validation_steps"]
