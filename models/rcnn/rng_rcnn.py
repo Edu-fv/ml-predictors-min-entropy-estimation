@@ -1,7 +1,6 @@
 # Standard library imports
 import os
 import sys
-import gc
 import time
 from timeit import default_timer as timer
 
@@ -39,7 +38,6 @@ process = psutil.Process()
 def build_model(config, target_bits=1, scale_factor=1):
     model = Sequential()
     dim = 2
-    loss = "binary_crossentropy"
     output_dim = 2**target_bits
 
     if scale_factor == 1:
@@ -83,7 +81,11 @@ def build_model(config, target_bits=1, scale_factor=1):
     model.add(Dense(output_dim))
     model.add(Activation("softmax"))
 
-    model.compile()
+    # Compile with optimizer and loss for proper model setup
+    model.compile(
+        optimizer=tf.keras.optimizers.RMSprop(learning_rate=config.get("learning_rate", 0.005)),
+        loss="binary_crossentropy"
+    )
     return model
 
 
@@ -136,9 +138,6 @@ def evaluate_model(model, config):
             )
             nice_log(f"Number of threads: {process.num_threads()}")
             nice_log(f"Time elapsed (seconds): {timer()- start_loop:.1f} seconds")
-
-        del preds
-        _ = gc.collect()
 
         count += 1
 
@@ -230,10 +229,16 @@ def train_model(model, config, evaluation_checkpoints, first_model=None):
     loss_fn = tf.keras.losses.BinaryCrossentropy(from_logits=False)
     optimizer = tf.keras.optimizers.RMSprop(learning_rate=config["learning_rate"])
 
+    nice_log(f"Starting training for {config['epochs']} epoch(s)...")
+    
     for epoch in range(config["epochs"]):
+        epoch_loss = 0.0
+        num_batches = 0
+        
         for i, (x, y) in enumerate(train_dataset):
             # Incrementing the samples processed
             bytes_processed += (x.shape[0] * x.shape[1]) // 8
+            num_batches += 1
 
             # Check if the accumulated size has exceeded the next checkpoint
             while (
@@ -257,6 +262,17 @@ def train_model(model, config, evaluation_checkpoints, first_model=None):
             grads = tape.gradient(loss_value, model.trainable_variables)
             # Update weights
             optimizer.apply_gradients(zip(grads, model.trainable_variables))
+            
+            epoch_loss += loss_value.numpy()
+            
+            # Log progress every 100 batches
+            if (i + 1) % 100 == 0:
+                avg_loss = epoch_loss / num_batches
+                nice_log(f"Epoch {epoch + 1}/{config['epochs']}, Batch {i + 1}, Avg Loss: {avg_loss:.4f}, Bytes processed: {bytes_processed}")
+        
+        # End of epoch summary
+        if num_batches > 0:
+            nice_log(f"Epoch {epoch + 1} completed. Avg Loss: {epoch_loss / num_batches:.4f}, Total batches: {num_batches}")
 
     training_time = float(timer() - start) / 60
     nice_log(f"Training time: {training_time:.1f} minutes")
