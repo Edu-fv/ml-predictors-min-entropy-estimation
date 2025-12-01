@@ -16,17 +16,47 @@ MIN_EVAL_ORDER = 4
 EVALS_PER_ORDER = 2
 
 
-def calculate_p_c(random_bytes, num_bytes=10**4):
-    # Convert the random bytes to a bit array
-    random_bits = np.unpackbits(np.frombuffer(random_bytes[:num_bytes], dtype=np.uint8))
-    # Compute the number of zeroes
-    n_zeroes = np.sum(random_bits == 0)
-    # Compute p_c for the random bytes
-    total_bits = len(random_bits)
-    p_c_zeroes = n_zeroes / total_bits
-    p_c_random_bytes = max(p_c_zeroes, 1 - p_c_zeroes)
+class NistEntropyAssessment:
+    """Runs NIST SP800-90B entropy assessment as a background process."""
+    
+    def __init__(self, sample_file, binary_path=ENTROPY_TEST_BINARY):
+        self.sample_file = sample_file
+        self.binary_path = binary_path
+        self.command = [binary_path, "-a", "-v", sample_file]
+        self._process = None
+    
+    def start(self):
+        self._process = subprocess.Popen(
+            self.command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        return self
+    
+    def wait(self):
+        if self._process is None:
+            raise RuntimeError("Must call start() before wait()")
+        
+        stdout, stderr = self._process.communicate()
+        
+        if self._process.returncode != 0:
+            raise subprocess.CalledProcessError(
+                self._process.returncode, 
+                self.command, 
+                output=stdout, 
+                stderr=stderr
+            )
+        
+        print(stdout)
+        return parse_entropy_output(stdout)
 
-    return p_c_random_bytes
+
+def calculate_p_c(random_bytes, num_bytes=10**4):
+    """Compute max bit bias: max(P(0), P(1))."""
+    random_bits = np.unpackbits(np.frombuffer(random_bytes[:num_bytes], dtype=np.uint8))
+    p_zeroes = np.sum(random_bits == 0) / len(random_bits)
+    return max(p_zeroes, 1 - p_zeroes)
 
 
 def experimental_min_entropy(p_ml, target_bits=1):
@@ -45,24 +75,18 @@ def write_results_to_csv(output_dict, results_dir):
 
 
 def save_random_data(data, data_target_file, sample_target_file, sample_size=10**7):
-    """
-    We save the random data.
-    We also save a sample of at most sample_size bytes (defaults to 100**7) to a file to be used by the NIST entropy assessment.
-    """
+    """Save full data and a sample for NIST assessment."""
     with open(data_target_file, "wb") as f:
         f.write(data)
-    sample_data = data[:sample_size]
     with open(sample_target_file, "wb") as f:
-        f.write(sample_data)
+        f.write(data[:sample_size])
 
 
 def check_test_to_classes_ratio(
     num_bytes, test_ratio, train_ratio, target_bits, seqlen, step
 ):
     threshold_ratio = 1
-    total_elements = (
-        num_bytes  # In bits mode, the total elements are simply the number of bytes.
-    )
+    total_elements = num_bytes
 
     train_sequences = (
         int(total_elements * train_ratio) - int(np.ceil(seqlen / 8))
@@ -100,7 +124,6 @@ def generate_gbAR_random_bytes(alpha_scaling_factor, data_param_dict, beta, num_
             data_param_dict["gaussian_sigma"],
             0.001,
         )
-    # if it contains the substring constant_
     elif "constant_" in autocorrelation_function:
         signs = data_param_dict["signs"]
         alpha = arp.constant_alpha(distance_scale_p, alpha_scaling_factor, signs=signs)
@@ -125,47 +148,57 @@ def generate_evaluation_checkpoints(start_order, end_order, num_points_per_order
     return evaluation_checkpoints
 
 
-def get_model_runner(model_name):
-    """
-    Imports the specific model module and returns a runner function
-    that adapts the parameters and executes the model.
-    """
-    if model_name == "gpt2":
-        from models.gpt2 import rng_gpt2 as model
-
-        def runner(params):
-            run_params = params.copy()
-            if run_params.get("batch_size") is None:
-                run_params["batch_size"] = 8
-            run_params["model_size_parameters"] = {
-                "n_positions": run_params["seqlen"],
-                "n_ctx": run_params["seqlen"],
+class ModelRunner:
+    """Runs ML models (GPT-2 or RCNN) with model-specific configurations."""
+    
+    MODEL_DEFAULTS = {
+        "gpt2": {
+            "batch_size": 8,
+            "model_size_parameters": lambda p: {
+                "n_positions": p["seqlen"],
+                "n_ctx": p["seqlen"],
                 "n_embd": 768,
                 "n_layer": 12,
                 "n_head": 12,
-            }
-            return model.main(**run_params)
-
-        return runner
-
-    elif model_name == "rcnn":
-        from models.rcnn import rng_rcnn as model
-
-        def runner(params):
-            run_params = params.copy()
-            # Remove keys not expected by RCNN main
-            run_params.pop("is_autoregressive", None)
-            run_params.pop("evaluate_all_bits", None)
-
-            if run_params.get("batch_size") is None:
-                run_params["batch_size"] = 2 * 10**3
-
-            run_params["model_size_parameters"] = dict(scale_factor=2)
-            return model.main(**run_params)
-
-        return runner
-    else:
-        raise ValueError(f"Unknown model name: {model_name}")
+            },
+            "remove_keys": [],
+        },
+        "rcnn": {
+            "batch_size": 2 * 10**3,
+            "model_size_parameters": lambda p: {"scale_factor": 2},
+            "remove_keys": ["is_autoregressive", "evaluate_all_bits"],
+        },
+    }
+    
+    def __init__(self, model_name):
+        if model_name not in self.MODEL_DEFAULTS:
+            raise ValueError(f"Unknown model: {model_name}. Available: {list(self.MODEL_DEFAULTS.keys())}")
+        self.model_name = model_name
+        self.config = self.MODEL_DEFAULTS[model_name]
+        self._module = None
+    
+    def _load_module(self):
+        if self._module is None:
+            if self.model_name == "gpt2":
+                from models.gpt2 import rng_gpt2 as module
+            elif self.model_name == "rcnn":
+                from models.rcnn import rng_rcnn as module
+            self._module = module
+        return self._module
+    
+    def run(self, params):
+        module = self._load_module()
+        run_params = params.copy()
+        
+        for key in self.config["remove_keys"]:
+            run_params.pop(key, None)
+        
+        if run_params.get("batch_size") is None:
+            run_params["batch_size"] = self.config["batch_size"]
+        
+        run_params["model_size_parameters"] = self.config["model_size_parameters"](run_params)
+        
+        return module.main(**run_params)
 
 
 def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0):
@@ -188,10 +221,9 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
     data_target_file = f"{results_dir}/random_bytes.bin"
     sample_target_file = f"{results_dir}/random_bytes_sample.bin"
     model_param_dict["filename"] = data_target_file
-    model_runner = get_model_runner(model_name)
+    model_runner = ModelRunner(model_name)
     total_runs = len(data_param_dict["target_bits"]) * len(data_param_dict["corr_intensities"])
     
-    # iterate over all pairs of corr_intensity and target_bits without repetition
     for target_bits, corr_intensity in itertools.product(
         data_param_dict["target_bits"], data_param_dict["corr_intensities"]
     ):
@@ -205,31 +237,14 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
             model_param_dict["num_bytes"],
         )
         save_random_data(random_bytes, data_target_file, sample_target_file)
-        # Running entropy calculations on data
-        p_c_source = calculate_p_c(random_bytes)  # Bit bias on raw source data
+        
+        p_c_source = calculate_p_c(random_bytes)
         min_entropy_th = arp.ar_min_entropy_limit(beta)
-        # Running NIST entropy assessment in parallel with the model
-        # We now use Popen to avoid forking inside a CUDA context (which ProcessPoolExecutor does)
-        command = [ENTROPY_TEST_BINARY, "-a", "-v", sample_target_file]
-        nist_process = subprocess.Popen(
-            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
+        
+        nist = NistEntropyAssessment(sample_target_file).start()
+        ml_results = model_runner.run(model_param_dict)
+        entropies_dict = nist.wait()
 
-        # Run the model in the main thread
-        ml_results = model_runner(model_param_dict)
-
-        # Wait for NIST assessment to finish and get output
-        stdout, stderr = nist_process.communicate()
-
-        if nist_process.returncode != 0:
-            raise subprocess.CalledProcessError(
-                nist_process.returncode, command, output=stdout, stderr=stderr
-            )
-
-        print(stdout)
-        entropies_dict = parse_entropy_output(stdout)
-
-        # Base result dict for this run (constant across all eval checkpoints)
         base_result = {
             "model": model_name,
             "nn_info_unit": "bit",
@@ -254,7 +269,6 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
             **entropies_dict,
         }
 
-        # Add ML results (without eval_results list)
         ml_info = {k: v for k, v in ml_results.items() if k != "eval_results"}
 
         for partial_eval in ml_results["eval_results"]:
@@ -276,7 +290,6 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
         os.remove(data_target_file)
         os.remove(sample_target_file)
 
-        # Only sleep between runs if there are multiple runs and cooldown is set
         if gpu_cooldown > 0 and total_runs > 1:
             time.sleep(gpu_cooldown)
 
@@ -392,17 +405,13 @@ if __name__ == "__main__":
         raise ValueError("Unknown autocorrelation function.")
 
     if args.corr_intensities is None:
-        corr_intensities = np.linspace(
-            0, 0.99, num=10
-        )  # generates 5 values between 0.3 and 0.5
-        # corr_intensities = np.logspace(-2, -0.001, num=20) # this give us more density at the beginning of the interval
+        corr_intensities = np.linspace(0, 0.99, num=10)
     else:
         for corr_intensity in args.corr_intensities:
             if corr_intensity < 0 or corr_intensity > 1:
                 raise ValueError("Correlation intensity must be between 0 and 1")
         corr_intensities = args.corr_intensities
 
-    # list of target bits from 1 to 8
     if args.target_bits is None:
         target_bits = [1]
     else:
@@ -419,7 +428,6 @@ if __name__ == "__main__":
         gaussian_sigma = args.distance_scale_p / 100
 
     if args.autocorrelation_function == "constant" and args.signs is not None:
-        # check if the number of signs is equal to the distance scale p
         if len(args.signs) != args.distance_scale_p:
             raise ValueError("Number of signs must be equal to the distance scale p")
         for sign in args.signs:
@@ -440,9 +448,7 @@ if __name__ == "__main__":
             step,
         )
 
-    upper_order = num_bytes_order_of_magnitude = int(np.floor(np.log10(1000000)))
-    # TODO: generate evaluation checkpoints here if needed
-    # evaluation_checkpoints = generate_evaluation_checkpoints(MIN_EVAL_ORDER, upper_order, EVALS_PER_ORDER)
+    upper_order = int(np.floor(np.log10(1000000)))
     evaluation_checkpoints = []
 
     model_param_dict = {
