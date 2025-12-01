@@ -6,7 +6,6 @@ from timeit import default_timer as timer
 
 # Related third-party imports
 import numpy as np
-import psutil
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Activation, Dropout, LSTM, Convolution1D
 from tensorflow.keras.models import Sequential
@@ -17,22 +16,17 @@ from .argparser.argparser import parse_arguments
 from .aux.aux import (
     get_config,
     gpu_config,
-    get_memory_usage,
     log_model_parameters,
     check_test_to_classes_ratio,
 )
 from .data_proc.data_proc import data_generator
 
-file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 utils_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, utils_path)
 from utils.nice_log import nice_log
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 MODEL_NAME = "rcnn"
-
-# Get the current process
-process = psutil.Process()
 
 
 def build_model(config, target_bits=1, scale_factor=1):
@@ -154,23 +148,7 @@ def evaluate_model(model, config):
     return results
 
 
-def indices_to_one_hot_tf(predicted_bits, num_bits):
-    powers = tf.constant([2 ** (num_bits - 1 - i) for i in range(num_bits)], dtype=tf.int32)
-    
-    # Expand predicted_bits to allow broadcasting: shape (batch_size, 1)
-    predicted_expanded = tf.expand_dims(tf.cast(predicted_bits, tf.int32), axis=-1)
-    
-    # Extract each bit using integer division and modulo
-    # bit_i = (index // 2^(n-1-i)) % 2
-    bit_values = tf.math.floormod(tf.math.floordiv(predicted_expanded, powers), 2)
-    
-    # One-hot encode each bit: shape (batch_size, num_bits, 2)
-    one_hot_sequences = tf.one_hot(bit_values, depth=2)
-    
-    return tf.cast(one_hot_sequences, tf.bool)
-
-
-def train_model(model, config, evaluation_checkpoints, first_model=None):
+def train_model(model, config, evaluation_checkpoints):
     start = timer()
 
     # Define other necessary variables

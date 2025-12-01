@@ -156,7 +156,6 @@ def evaluate_model(model, config, data, device, target_bits=1):
 
     total = correct = 0
     total_cross_entropy = 0
-    n_zeroes = 0
     all_binary_predictions = []
 
     loss_fn = torch.nn.CrossEntropyLoss()
