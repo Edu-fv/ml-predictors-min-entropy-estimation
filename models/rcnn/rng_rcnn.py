@@ -171,26 +171,19 @@ def evaluate_model(model, config):
 
 
 def indices_to_one_hot_tf(predicted_bits, num_bits):
-    def format_binary_string(idx, num_bits):
-        return format(idx, "0{}b".format(num_bits))
-
-    # Create a tensor to store one-hot encoded sequences
-    one_hot_sequences = tf.TensorArray(dtype=tf.float32, size=len(predicted_bits))
-
-    for i in tf.range(len(predicted_bits)):
-        idx = predicted_bits[i]
-        bit_sequence = tf.py_function(
-            func=format_binary_string, inp=[idx, num_bits], Tout=tf.string
-        )
-        bit_sequence = tf.strings.bytes_split(bit_sequence)
-        bit_sequence = tf.strings.to_number(bit_sequence, out_type=tf.float32)
-        one_hot_bit_sequence = tf.one_hot(tf.cast(bit_sequence, tf.int32), depth=2)
-        one_hot_sequences = one_hot_sequences.write(i, one_hot_bit_sequence)
-
-    one_hot_sequences = one_hot_sequences.stack()
-    one_hot_sequences = tf.cast(one_hot_sequences, tf.bool)
-
-    return one_hot_sequences
+    powers = tf.constant([2 ** (num_bits - 1 - i) for i in range(num_bits)], dtype=tf.int32)
+    
+    # Expand predicted_bits to allow broadcasting: shape (batch_size, 1)
+    predicted_expanded = tf.expand_dims(tf.cast(predicted_bits, tf.int32), axis=-1)
+    
+    # Extract each bit using integer division and modulo
+    # bit_i = (index // 2^(n-1-i)) % 2
+    bit_values = tf.math.floormod(tf.math.floordiv(predicted_expanded, powers), 2)
+    
+    # One-hot encode each bit: shape (batch_size, num_bits, 2)
+    one_hot_sequences = tf.one_hot(bit_values, depth=2)
+    
+    return tf.cast(one_hot_sequences, tf.bool)
 
 
 def train_model(model, config, evaluation_checkpoints, first_model=None):
