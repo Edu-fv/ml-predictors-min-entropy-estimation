@@ -3,14 +3,17 @@ import torch
 
 def binary_inference(model, x, y, loss_fn, correct, total):
     logits = model(x).logits
-    probs = torch.sigmoid(logits)
-    predicted = probs.round()
-    loss = loss_fn(logits, y)
+    probs = torch.softmax(logits, dim=-1)
+    predicted = torch.argmax(probs, dim=-1)
+    
+    # Flatten for CrossEntropyLoss
+    loss = loss_fn(logits.view(-1, 2), y.view(-1))
+    
     correct += (predicted == y).sum().item()
     total += y.numel()
 
-    # Convert one-hot encoded predictions to binary form
-    binary_predictions = torch.argmax(predicted, dim=-1).cpu()
+    # Predictions are already indices (0 or 1)
+    binary_predictions = predicted.cpu()
     return binary_predictions, loss, correct, total
 
 
@@ -20,8 +23,8 @@ def multitoken_inference(
     # model(x).logits has shape [batch_size, sequence_length, 2**target_bits]
     logits = model(x).logits
 
-    _, target_indices = y.max(dim=2)
-    target = target_indices.view(-1)
+    # y is already indices
+    target = y.view(-1)
 
     # Flatten logits and target for loss calculation
     flattened_logits = logits.view(-1, 2**target_bits)
@@ -38,9 +41,7 @@ def multitoken_inference(
 
         last_predicted = last_logits.argmax(dim=1)  # Predictions for the last token
 
-        last_target = y[:, -1, :].max(dim=1)[
-            1
-        ]  # Get the index of the max logit for the last token
+        last_target = y[:, -1]  # Get the target index for the last token
 
         correct += (last_predicted == last_target).sum().item()
         total += x.size(0)  # Total number of examples in the batch
@@ -55,42 +56,29 @@ def multitoken_inference(
 
 
 def eval_multi(predictions, target, target_bits, correct, total, config):
+    # predictions: indices [B, S]
+    # target: indices [B, S]
+    
     if config["evaluate_all_bits"]:
-        # This computes a tensor where each element is 1 if all corresponding labels match, and 0 otherwise
-        correct_predictions = (predictions == target).all(dim=2)
-        # Sum up the correct predictions to get the total number of completely correct samples
-        correct += correct_predictions.sum().item()
-        # The total number of samples is just the size of the first dimension of target tensor
-        total += target.size(0) * target.size(1)
+        correct += (predictions == target).sum().item()
+        total += target.numel()
     else:
-        predictions_last_bits = predictions[:, -1, -target_bits:]
-        target_last_bits = target[:, -1, -target_bits:]
-
-        # Compute correct predictions for the last target_bits bits
-        correct_predictions_last_bits = (predictions_last_bits == target_last_bits).all(
-            dim=1
-        )
-
-        # Sum up the correct predictions
-        correct += correct_predictions_last_bits.sum().item()
-
-        # The total number of samples is the first dimension of  target tensor
+        correct += (predictions[:, -1] == target[:, -1]).sum().item()
         total += target.size(0)
-
-    binary_predictions = predictions.view(-1)
-    return binary_predictions, correct, total
+        
+    return correct, total
 
 
 def autoregressive_inference(
     model, x, y, target_bits, loss_fn, correct, total, config, device
 ):
-    target = y.float()
+    target = y
     x_current = x.to(device)
     predictions_sequence = []
 
     for step in range(target_bits):
         logits = model(x_current).logits
-        probs = torch.sigmoid(logits)
+        probs = torch.softmax(logits, dim=-1)
         predicted_bits = torch.argmax(probs, dim=-1)
 
         # Remove the first element from x_current and append the new predicted element
@@ -116,11 +104,18 @@ def autoregressive_inference(
     predictions = torch.nn.functional.one_hot(
         decimal_predictions, num_classes=2**target_bits
     ).to(torch.float)
-    loss = loss_fn(predictions, target)
+    
+    # Since we have hard predictions (0 or 1), we can't calculate a true Cross Entropy Loss (which requires logits/probabilities).
+    # However, to maintain interface consistency, we return a dummy loss or a proxy.
+    # Here we calculate the accuracy as a proxy for loss (1 - accuracy) or just return 0.0 since we are in inference.
+    # But to be safe and consistent with other functions returning a loss tensor:
+    loss = torch.tensor(0.0, device=device)
 
-    binary_predictions, correct, total = eval_multi(
-        predictions, target, target_bits, correct, total, config
+    correct, total = eval_multi(
+        decimal_predictions, target, target_bits, correct, total, config
     )
+
+    binary_predictions = concatenated_bits.view(-1).cpu()
 
     return binary_predictions, loss, correct, total
 

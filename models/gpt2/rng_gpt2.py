@@ -74,13 +74,12 @@ def train_model(
     start = timer()
     model.to(device)
     optimizer = torch.optim.RMSprop(model.parameters(), lr=config["learning_rate"])
+    
     if config["is_autoregressive"]:
         # We train the model to predict the next bit in the sequence
         target_bits = 1
-    if target_bits == 1:
-        loss_fn = torch.nn.BCEWithLogitsLoss()
-    else:
-        loss_fn = torch.nn.CrossEntropyLoss()
+        
+    loss_fn = torch.nn.CrossEntropyLoss()
     scaler = torch.amp.GradScaler("cuda")
 
     model.train()
@@ -126,21 +125,12 @@ def train_model(
             with torch.amp.autocast("cuda"):
                 output = model(x)
 
-                if target_bits == 1:
-                    logits = output.logits
-                    loss = loss_fn(logits, y)
-                else:
-                    # Flatten the logits to a 2D tensor where each row has num_classes columns
-                    logits = output.logits.view(-1, 2**target_bits)
-                    # Convert the target to a 1D tensor with class indices
-                    _, target_indices = y.max(
-                        dim=2
-                    )  # This extracts the index of the max value in one-hot encoding
-                    target = target_indices.view(
-                        -1
-                    )  # Flatten the target_indices to match logits' first dimension
-                    # Compute the loss
-                    loss = loss_fn(logits, target)
+                # Flatten the logits to a 2D tensor where each row has num_classes columns
+                logits = output.logits.view(-1, 2**target_bits)
+                # y is already indices, just flatten it
+                target = y.view(-1)
+                # Compute the loss
+                loss = loss_fn(logits, target)
 
             # Scales loss, calls backward() on scaled loss to create scaled gradients.
             scaler.scale(loss).backward()
@@ -168,10 +158,8 @@ def evaluate_model(model, config, data, device, target_bits=1):
     n_zeroes = 0
     all_binary_predictions = []
 
-    if target_bits == 1:
-        loss_fn = torch.nn.BCEWithLogitsLoss()
-    else:
-        loss_fn = torch.nn.CrossEntropyLoss()
+    loss_fn = torch.nn.CrossEntropyLoss()
+    if target_bits > 1:
         tokenizer = NBitsTokenizer(n_bits=target_bits)
 
     with torch.no_grad():
@@ -213,7 +201,7 @@ def evaluate_model(model, config, data, device, target_bits=1):
             all_binary_predictions.append(binary_predictions)
 
             # Counting zeroes
-            n_zeroes += y[:, :, 0].sum().item()
+            n_zeroes += (y == 0).sum().item()
 
             # Compute the cross-entropy loss for this mini-batch
             total_cross_entropy += loss.item()

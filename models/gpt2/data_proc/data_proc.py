@@ -138,9 +138,9 @@ class BinaryDataset(Dataset):
         target_indices = np.dot(target_bits_matrix, self.powers)
         
         target_sequence = torch.from_numpy(target_indices.astype(np.int64))
-        target_one_hot = F.one_hot(target_sequence, num_classes=self.num_classes).float()
+        # target_one_hot = F.one_hot(target_sequence, num_classes=self.num_classes).float()
         
-        return input_sequence, target_one_hot
+        return input_sequence, target_sequence
 
 
 def load_and_prepare_data(config, num_workers=4):
