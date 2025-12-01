@@ -1,3 +1,5 @@
+import os
+import mmap
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -47,11 +49,31 @@ class BinaryDataset(Dataset):
     """Dataset for binary sequence prediction with configurable target bits."""
     
     def __init__(
-        self, binary_data, config, start_index=0, end_index=None, is_training=False
+        self, data_source, config, start_index=0, end_index=None, is_training=False
     ):
-        data_slice = binary_data[start_index:end_index]
-        np_data = np.frombuffer(data_slice, dtype=np.uint8)
-        self.bits = np.unpackbits(np_data)
+        # data_source can be a file path (str) or bytes/mmap
+        self.data_source = data_source
+        self.config = config
+        self.start_index = start_index
+        self.end_index = end_index
+        self.is_training = is_training
+        
+        self.data = None
+        self.file_handle = None
+        
+        if not isinstance(self.data_source, str):
+             self.data = data_source
+             if self.end_index is None:
+                 self.end_index = len(self.data)
+        
+        if self.end_index is None:
+             if self.data is not None:
+                 self.end_index = len(self.data)
+             else:
+                 raise ValueError("end_index must be provided if data_source is a file path")
+
+        # Calculate total bits available in this slice
+        self.num_bits = (self.end_index - self.start_index) * 8
         
         if is_training and config["is_autoregressive"]:
             self.target_bits = 1
@@ -67,18 +89,48 @@ class BinaryDataset(Dataset):
         # Precompute target indices offset matrix (relative to each position)
         self.target_offsets = np.arange(self.seqlen)[:, None] + np.arange(1, self.target_bits + 1)
 
+    def _get_data(self):
+        if self.data is None:
+            if isinstance(self.data_source, str):
+                self.file_handle = open(self.data_source, "rb")
+                self.data = mmap.mmap(self.file_handle.fileno(), 0, access=mmap.ACCESS_READ)
+            else:
+                raise ValueError("Data source is not a file path and data is None")
+        return self.data
+
     def __len__(self):
-        total_steps = (len(self.bits) - self.seqlen - self.target_bits) // self.step
+        total_steps = (self.num_bits - self.seqlen - self.target_bits) // self.step
         num_batches = total_steps // self.batch_size
-        return num_batches * self.batch_size
+        return max(0, num_batches * self.batch_size)
 
     def __getitem__(self, idx):
         if idx >= len(self):
             raise IndexError
         
-        start = idx * self.step
-        end = start + self.seqlen + self.target_bits
-        bits_slice = self.bits[start:end]
+        # Global bit index relative to the start of this dataset slice
+        bit_start_rel = idx * self.step
+        bit_end_rel = bit_start_rel + self.seqlen + self.target_bits
+        
+        # Absolute bit index in the source data
+        bit_start_abs = self.start_index * 8 + bit_start_rel
+        bit_end_abs = self.start_index * 8 + bit_end_rel
+        
+        # Byte indices
+        byte_start = bit_start_abs // 8
+        byte_end = (bit_end_abs + 7) // 8
+        
+        # Read bytes
+        data = self._get_data()
+        data_slice = data[byte_start:byte_end]
+        
+        # Unpack
+        np_data = np.frombuffer(data_slice, dtype=np.uint8)
+        bits = np.unpackbits(np_data)
+        
+        # Extract exact bits
+        offset = bit_start_abs % 8
+        length = bit_end_rel - bit_start_rel
+        bits_slice = bits[offset : offset + length]
         
         input_sequence = torch.from_numpy(bits_slice[:self.seqlen].astype(np.int64))
         
@@ -92,16 +144,21 @@ class BinaryDataset(Dataset):
 
 
 def load_and_prepare_data(config, num_workers=4):
-    with open(config["filename"], "rb") as f:
-        binary_data = f.read(config["num_bytes"])
+    file_path = config["filename"]
+    file_size = os.path.getsize(file_path)
+    
+    num_bytes = config["num_bytes"]
+    if num_bytes > file_size:
+        num_bytes = file_size
 
-    total_length = len(binary_data)
-    train_length = int(total_length * config["train_ratio"])
+    train_length = int(num_bytes * config["train_ratio"])
 
     train_dataset = BinaryDataset(
-        binary_data, config, end_index=train_length, is_training=True
+        file_path, config, start_index=0, end_index=train_length, is_training=True
     )
-    eval_dataset = BinaryDataset(binary_data, config, start_index=train_length)
+    eval_dataset = BinaryDataset(
+        file_path, config, start_index=train_length, end_index=num_bytes
+    )
 
     return (
         DataLoader(
