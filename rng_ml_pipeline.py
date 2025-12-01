@@ -185,14 +185,20 @@ def execute_model(model_name, model_param_dict):
             "n_head": 12,
         }
     elif model_name == "rcnn":
-        model_param_dict.pop("is_autoregressive", None)
-        model_param_dict.pop("evaluate_all_bits", None)
+        is_autoregressive = model_param_dict.pop("is_autoregressive", False)
+        evaluate_all_bits = model_param_dict.pop("evaluate_all_bits", False)
         from models.rcnn import rng_rcnn as model
 
         if model_param_dict["batch_size"] is None:
             model_param_dict["batch_size"] = 2 * 10**3
 
         model_param_dict["model_size_parameters"] = dict(scale_factor=2)
+        
+        result = model.main(**model_param_dict)
+        # Restore the keys for use in create_constant_dict
+        model_param_dict["is_autoregressive"] = is_autoregressive
+        model_param_dict["evaluate_all_bits"] = evaluate_all_bits
+        return result
     else:
         raise ValueError("Unknown model name.")
 
