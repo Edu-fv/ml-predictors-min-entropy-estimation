@@ -74,9 +74,9 @@ def get_config(
     if "_mod" in filename:
         generator += filename.split("_mod")[1].split("-")[0]
     output_string_filename = f"{generator}_seqlen_{seqlen}_step_{step}_num_bytes_{num_bytes}_train_ratio_{train_ratio}_test_ratio_{test_ratio}"
-    weights_filename = f"{output_string_filename}_weights.hdf5"
+    weights_filename = f"{output_string_filename}.weights.h5"
     second_model_weights_filename = (
-        f"{output_string_filename}_second_model_weights.hdf5"
+        f"{output_string_filename}_second_model.weights.h5"
     )
     weights_path = os.path.join(WEIGHTS_DIR, weights_filename)
     second_model_weights_path = os.path.join(WEIGHTS_DIR, second_model_weights_filename)
