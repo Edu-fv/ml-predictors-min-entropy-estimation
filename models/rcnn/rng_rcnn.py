@@ -252,14 +252,11 @@ def train_model(model, config, evaluation_checkpoints, first_model=None):
             with tf.GradientTape() as tape:
                 logits = model(x, training=True)
                 loss_value = loss_fn(y, logits)
-                # Compute gradients
-                grads = tape.gradient(loss_value, model.trainable_variables)
-                # Update weights
-                optimizer.apply_gradients(zip(grads, model.trainable_variables))
-                # Compute gradients
-                grads = tape.gradient(loss_value, model.trainable_variables)
-                # Update weights
-                optimizer.apply_gradients(zip(grads, model.trainable_variables))
+            
+            # Compute gradients
+            grads = tape.gradient(loss_value, model.trainable_variables)
+            # Update weights
+            optimizer.apply_gradients(zip(grads, model.trainable_variables))
 
     training_time = float(timer() - start) / 60
     nice_log(f"Training time: {training_time:.1f} minutes")
