@@ -175,6 +175,20 @@ python rng_ml_pipeline.py --num_bytes 10000000 --target_bits 1 2 3 4 5 6 7 8 --c
 
 ## Entropy calculations
 
+### Output Metrics
+
+The pipeline and models output several probability metrics:
+
+| Metric | Description |
+|--------|-------------|
+| `p_ml` | ML prediction accuracy: fraction of correctly predicted bits/sequences |
+| `p_g` | Random guessing probability: $1/2^{\text{target\_bits}}$ |
+| `p_c_source` | Bit bias on raw source data: $\max(P(0), P(1))$ computed on generated random bytes |
+| `p_c_pred` | Bit bias on model predictions: $\max(P(0), P(1))$ computed on test set predictions |
+| `p_e` | Binary entropy of predictions |
+| `min_entropy_estimated` | Estimated min-entropy: $-\log_2(p_{ml}) / \text{target\_bits}$ |
+| `min_entropy_th` | Theoretical min-entropy limit for the AR process |
+
 ### Monte Carlo simulations
 
 The parameters are harcoded in the script (go anc check them before running it)

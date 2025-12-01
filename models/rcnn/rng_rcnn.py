@@ -115,7 +115,7 @@ def evaluate_model(model, config):
     p_ml = n_true / n_total
     p_g = 1 / 2 ** config["target_bits"]
     
-    # Convert class indices to binary to count zeros at bit level
+    # p_c_pred: bit bias on model predictions (convert class indices to binary to count zeros)
     concatenated_predictions = np.concatenate(all_predictions, axis=0)
     target_bits = config["target_bits"]
     # Convert each class index to its binary representation
@@ -123,7 +123,7 @@ def evaluate_model(model, config):
     total_bits = binary_matrix.size
     n_zeroes = np.sum(binary_matrix == 0)
     p_c_zeroes = n_zeroes / total_bits
-    p_c = max(p_c_zeroes, 1 - p_c_zeroes)
+    p_c_pred = max(p_c_zeroes, 1 - p_c_zeroes)
     
     p_zeroes = n_zeroes / total_bits
     overall_entropy = binary_entropy(p_zeroes)
@@ -134,15 +134,15 @@ def evaluate_model(model, config):
 
     results = {
         "evaluation_time": evaluation_time,
-        "P_ML": p_ml,
-        "P_g": p_g,
-        "P_c": p_c,
-        "P_e": overall_entropy,
+        "p_ml": p_ml,
+        "p_g": p_g,
+        "p_c_pred": p_c_pred,
+        "p_e": overall_entropy,
         "bin_cross-entropy_loss": average_cross_entropy,
     }
 
     nice_log(
-        f"Evaluation completed in {evaluation_time:.2f} minutes - P_ML: {p_ml:.5f}, P_g: {p_g:.5f}, P_c: {p_c:.5f}, "
+        f"Evaluation completed in {evaluation_time:.2f} minutes - p_ml: {p_ml:.5f}, p_g: {p_g:.5f}, p_c_pred: {p_c_pred:.5f}, "
         f"Predictions Entropy: {overall_entropy:.5f}, Cross-Entropy Loss: {average_cross_entropy:.5f}"
     )
     return results

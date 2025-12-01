@@ -206,7 +206,7 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
         )
         save_random_data(random_bytes, data_target_file, sample_target_file)
         # Running entropy calculations on data
-        p_c_random_bytes = calculate_p_c(random_bytes)
+        p_c_source = calculate_p_c(random_bytes)  # Bit bias on raw source data
         min_entropy_th = arp.ar_min_entropy_limit(beta)
         # Running NIST entropy assessment in parallel with the model
         # We now use Popen to avoid forking inside a CUDA context (which ProcessPoolExecutor does)
@@ -249,7 +249,7 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
             "distance_scale_p": data_param_dict["distance_scale_p"],
             "exponential_decay_rate": data_param_dict["exponential_decay_rate"],
             "gaussian_sigma": data_param_dict["gaussian_sigma"],
-            "p_c_max": p_c_random_bytes,
+            "p_c_source": p_c_source,
             "min_entropy_th": min_entropy_th,
             **entropies_dict,
         }
@@ -269,7 +269,7 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
                 "training_time": f"{training_time:.2f}" if training_time is not None else "-",
                 "evaluation_time": f"{evaluation_time:.2f}" if evaluation_time is not None else "-",
                 "bytes_processed_eval": partial_eval["bytes_processed_eval"],
-                "min_entropy_estimated": experimental_min_entropy(eval_result["P_ML"], target_bits),
+                "min_entropy_estimated": experimental_min_entropy(eval_result["p_ml"], target_bits),
             }
             write_results_to_csv(output_dict, results_dir)
 

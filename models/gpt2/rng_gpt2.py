@@ -205,11 +205,11 @@ def evaluate_model(model, config, data, device, target_bits=1):
 
     concatenated_binary_predictions = torch.cat(all_binary_predictions, dim=0)
     
-    # P_c: count zeros at the bit level (binary_predictions are already bits)
+    # p_c_pred: bit bias on model predictions (count zeros at the bit level)
     n_zeroes = (concatenated_binary_predictions == 0).sum().item()
     total_bits = concatenated_binary_predictions.numel()
     p_c_zeroes = n_zeroes / total_bits
-    p_c = max(p_c_zeroes, 1 - p_c_zeroes)
+    p_c_pred = max(p_c_zeroes, 1 - p_c_zeroes)
     
     p_zeroes = n_zeroes / total_bits  # Same calculation, reuse
     overall_entropy = binary_entropy(p_zeroes)
@@ -223,14 +223,14 @@ def evaluate_model(model, config, data, device, target_bits=1):
 
     results = {
         "evaluation_time": evaluation_time,
-        "P_ML": p_ml,
-        "P_g": p_g,
-        "P_c": p_c,
-        "P_e": overall_entropy,
+        "p_ml": p_ml,
+        "p_g": p_g,
+        "p_c_pred": p_c_pred,
+        "p_e": overall_entropy,
         "bin_cross-entropy_loss": average_cross_entropy,
     }
     nice_log(
-        f"Evaluation completed in {evaluation_time:.2f} minutes - P_ML: {p_ml:.5f}, P_g: {p_g:.5f}, P_c: {p_c:.5f}, "
+        f"Evaluation completed in {evaluation_time:.2f} minutes - p_ml: {p_ml:.5f}, p_g: {p_g:.5f}, p_c_pred: {p_c_pred:.5f}, "
         f"Predictions Entropy: {overall_entropy:.5f}, Cross-Entropy Loss: {average_cross_entropy:.5f}"
     )
 
