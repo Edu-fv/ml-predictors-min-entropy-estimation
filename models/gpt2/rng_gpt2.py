@@ -217,7 +217,7 @@ def evaluate_model(model, config, data, device, target_bits=1):
 
     p_ml = correct / total
     p_g = 1 / (2**target_bits)
-    p_c_zeroes = n_zeroes / (total // 2)
+    p_c_zeroes = n_zeroes / total
     p_c = max(p_c_zeroes, 1 - p_c_zeroes)
 
     evaluation_time = float(timer() - start) / 60
