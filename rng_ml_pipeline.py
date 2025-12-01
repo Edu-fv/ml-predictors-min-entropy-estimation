@@ -6,8 +6,6 @@ import itertools
 import subprocess
 import numpy as np
 
-from concurrent.futures import ProcessPoolExecutor
-
 from utils.nice_log import nice_log
 import autoregressive_process.autoregressive_process as arp
 from parsers.entropy_parsers import parse_entropy_output
@@ -16,14 +14,6 @@ OUTPUT_FILE_PATH = "./results"
 ENTROPY_TEST_BINARY = "./SP800-90B_EntropyAssessment/cpp/ea_non_iid"
 MIN_EVAL_ORDER = 4
 EVALS_PER_ORDER = 2
-
-
-def run_entropy_assessment(test_binary, file):
-    command = [test_binary, "-a", "-v", file]
-    proc = subprocess.run(command, capture_output=True, text=True, check=True)
-    print(proc.stdout)
-    entropies_dict = parse_entropy_output(proc.stdout)
-    return entropies_dict
 
 
 def calculate_p_c(random_bytes, num_bytes=10**4):
@@ -248,13 +238,25 @@ def main(model_param_dict, data_param_dict, model_name, hardware):
         p_c_random_bytes = calculate_p_c(random_bytes)
         min_entropy_th = arp.ar_min_entropy_limit(beta)
         # Running NIST entropy assessment in parallel with the model
-        with ProcessPoolExecutor(max_workers=2) as executor:
-            future1 = executor.submit(
-                run_entropy_assessment, ENTROPY_TEST_BINARY, sample_target_file
+        # We now use Popen to avoid forking inside a CUDA context (which ProcessPoolExecutor does)
+        command = [ENTROPY_TEST_BINARY, "-a", "-v", sample_target_file]
+        nist_process = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+
+        # Run the model in the main thread
+        ml_results = execute_model(model_name, model_param_dict)
+
+        # Wait for NIST assessment to finish and get output
+        stdout, stderr = nist_process.communicate()
+
+        if nist_process.returncode != 0:
+            raise subprocess.CalledProcessError(
+                nist_process.returncode, command, output=stdout, stderr=stderr
             )
-            future2 = executor.submit(execute_model, model_name, model_param_dict)
-            entropies_dict = future1.result()
-            ml_results = future2.result()
+
+        print(stdout)
+        entropies_dict = parse_entropy_output(stdout)
 
         constant_dict = create_constant_dict(
             model_name,
