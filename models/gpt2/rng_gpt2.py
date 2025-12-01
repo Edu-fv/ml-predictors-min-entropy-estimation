@@ -7,7 +7,6 @@ from timeit import default_timer as timer
 # Related third-party imports
 import numpy as np
 import torch
-from torch.cuda.amp import GradScaler, autocast
 
 from transformers import GPT2LMHeadModel, GPT2Config
 from tqdm import tqdm
@@ -82,7 +81,7 @@ def train_model(
         loss_fn = torch.nn.BCEWithLogitsLoss()
     else:
         loss_fn = torch.nn.CrossEntropyLoss()
-    scaler = GradScaler()
+    scaler = torch.amp.GradScaler("cuda")
 
     model.train()
 
@@ -124,7 +123,7 @@ def train_model(
             ):
                 raise Exception("Invalid values found")
 
-            with autocast():
+            with torch.amp.autocast("cuda"):
                 output = model(x)
 
                 if target_bits == 1:

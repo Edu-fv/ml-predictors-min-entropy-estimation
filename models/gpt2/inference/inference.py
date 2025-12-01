@@ -17,44 +17,6 @@ def binary_inference(model, x, y, loss_fn, correct, total):
 def multitoken_inference(
     model, x, y, target_bits, loss_fn, correct, total, config, tokenizer
 ):
-    # Model(x).logits has shape [batch_size, sequence_length, 2**target_bits]
-    logits = model(x).logits
-
-    _, target_indices = y.max(dim=2)
-    target = target_indices.view(-1)
-
-    # Flatten logits and target for loss calculation
-    flattened_logits = logits.view(-1, 2**target_bits)
-    loss = loss_fn(flattened_logits, target)
-
-    if config["evaluate_all_bits"]:
-        predicted = flattened_logits.argmax(dim=1)
-        correct += (predicted == target).sum().item()
-        total += target.size(0)
-        binary_predictions = tokenizer.detokenize(predicted.cpu().tolist())
-    else:
-        # Evaluate only the last token's logits for each batch item
-        last_logits = logits[:, -1, :]  # Shape: [batch_size, 2**target_bits]
-        last_predicted = last_logits.argmax(dim=1)  # Predictions for the last token
-
-        # Corresponding targets for the last token
-        last_target = y[:, -1, :]
-
-        correct += (last_predicted == last_target).sum().item()
-        total += x.size(0)  # Total number of examples in the batch
-
-        binary_predictions = tokenizer.detokenize(last_predicted.cpu().tolist())
-
-    binary_predictions = torch.tensor(
-        [int(bit) for bit in binary_predictions], dtype=torch.int32
-    )
-
-    return binary_predictions, loss, correct, total
-
-
-def multitoken_inference(
-    model, x, y, target_bits, loss_fn, correct, total, config, tokenizer
-):
     # model(x).logits has shape [batch_size, sequence_length, 2**target_bits]
     logits = model(x).logits
 
@@ -157,7 +119,7 @@ def autoregressive_inference(
     loss = loss_fn(predictions, target)
 
     binary_predictions, correct, total = eval_multi(
-        predictions, target, target_bits, config
+        predictions, target, target_bits, correct, total, config
     )
 
     return binary_predictions, loss, correct, total
