@@ -30,51 +30,7 @@ def calculate_p_c(random_bytes, num_bytes=10**4):
 
 
 def experimental_min_entropy(p_ml, target_bits=1):
-    if target_bits == 1:
-        min_entropy = -np.log2(p_ml)
-    else:
-        min_entropy = -np.log2(p_ml) / target_bits
-    return min_entropy
-
-
-def create_constant_dict(
-    model_name,
-    model_param_dict,
-    hardware,
-    corr_intensity,
-    data_param_dict,
-    p_c_random_bytes,
-    min_entropy_th,
-    entropies_dict,
-):
-    nn_info_unit = "bit"
-
-    return {
-        # Model parameters
-        "model": model_name,
-        "nn_info_unit": nn_info_unit,
-        "hardware": hardware,
-        "is_autoregressive": model_param_dict["is_autoregressive"],
-        "evaluate_all_bits": model_param_dict["evaluate_all_bits"],
-        # Data parameters
-        "num_bytes": f'{model_param_dict["num_bytes"]}',
-        "target_bits": f'{model_param_dict["target_bits"]}',
-        "seqlen": f'{model_param_dict["seqlen"]}',
-        "step": f'{model_param_dict["step"]}',
-        "train_ratio": f'{model_param_dict["train_ratio"]}',
-        "learning_rate": f'{model_param_dict["learning_rate"]}',
-        "batch_size": f'{model_param_dict["batch_size"]}',
-        "epochs": f'{model_param_dict["epochs"]}',
-        "corr_intensity": f"{corr_intensity:.3f}",
-        "autocorrelation_function": f'{data_param_dict["autocorrelation_function"]}',
-        "distance_scale_p": data_param_dict["distance_scale_p"],
-        "exponential_decay_rate": data_param_dict["exponential_decay_rate"],
-        "gaussian_sigma": data_param_dict["gaussian_sigma"],
-        "p_c_max": p_c_random_bytes,
-        "min_entropy_th": min_entropy_th,
-        # Entropies dict:
-        **entropies_dict,
-    }
+    return -np.log2(p_ml) / target_bits
 
 
 def write_results_to_csv(output_dict, results_dir):
@@ -213,7 +169,6 @@ def get_model_runner(model_name):
 
 
 def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0):
-    output_dict = dict()
     print("-----------------------------------")
     formatted_params = "\n".join(
         f"\t\t{key}: {value}" for key, value in model_param_dict.items()
@@ -227,16 +182,13 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
         color="green",
     )
     print("-----------------------------------")
+    
     results_dir = f"{OUTPUT_FILE_PATH}/{model_name}"
     os.makedirs(results_dir, exist_ok=True)
     data_target_file = f"{results_dir}/random_bytes.bin"
     sample_target_file = f"{results_dir}/random_bytes_sample.bin"
     model_param_dict["filename"] = data_target_file
-
-    # Get the model runner (loads model module once)
     model_runner = get_model_runner(model_name)
-
-    # Calculate total number of runs to determine if cooldown is needed
     total_runs = len(data_param_dict["target_bits"]) * len(data_param_dict["corr_intensities"])
     
     # iterate over all pairs of corr_intensity and target_bits without repetition
@@ -277,41 +229,48 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
         print(stdout)
         entropies_dict = parse_entropy_output(stdout)
 
-        constant_dict = create_constant_dict(
-            model_name,
-            model_param_dict,
-            hardware,
-            corr_intensity,
-            data_param_dict,
-            p_c_random_bytes,
-            min_entropy_th,
-            entropies_dict,
-        )
+        # Base result dict for this run (constant across all eval checkpoints)
+        base_result = {
+            "model": model_name,
+            "nn_info_unit": "bit",
+            "hardware": hardware,
+            "is_autoregressive": model_param_dict["is_autoregressive"],
+            "evaluate_all_bits": model_param_dict["evaluate_all_bits"],
+            "num_bytes": model_param_dict["num_bytes"],
+            "target_bits": target_bits,
+            "seqlen": model_param_dict["seqlen"],
+            "step": model_param_dict["step"],
+            "train_ratio": model_param_dict["train_ratio"],
+            "learning_rate": model_param_dict["learning_rate"],
+            "batch_size": model_param_dict["batch_size"],
+            "epochs": model_param_dict["epochs"],
+            "corr_intensity": f"{corr_intensity:.3f}",
+            "autocorrelation_function": data_param_dict["autocorrelation_function"],
+            "distance_scale_p": data_param_dict["distance_scale_p"],
+            "exponential_decay_rate": data_param_dict["exponential_decay_rate"],
+            "gaussian_sigma": data_param_dict["gaussian_sigma"],
+            "p_c_max": p_c_random_bytes,
+            "min_entropy_th": min_entropy_th,
+            **entropies_dict,
+        }
+
+        # Add ML results (without eval_results list)
+        ml_info = {k: v for k, v in ml_results.items() if k != "eval_results"}
 
         for partial_eval in ml_results["eval_results"]:
-            run_constant_info = ml_results.copy()
-            run_constant_info.pop("eval_results", None)
-
             eval_result = partial_eval["eval"]
-            bytes_processed_eval = partial_eval["bytes_processed_eval"]
-            min_entropy_estimated = experimental_min_entropy(
-                eval_result["P_ML"], target_bits
-            )
-
-            # Format times consistently (in minutes, 2 decimal places)
-            training_time = run_constant_info.get("training_time")
+            training_time = ml_info.get("training_time")
             evaluation_time = eval_result.get("evaluation_time")
-            
+
             output_dict = {
-                **constant_dict,
-                **run_constant_info,
+                **base_result,
+                **ml_info,
                 **eval_result,
                 "training_time": f"{training_time:.2f}" if training_time is not None else "-",
                 "evaluation_time": f"{evaluation_time:.2f}" if evaluation_time is not None else "-",
-                "bytes_processed_eval": bytes_processed_eval,
-                "min_entropy_estimated": min_entropy_estimated,
+                "bytes_processed_eval": partial_eval["bytes_processed_eval"],
+                "min_entropy_estimated": experimental_min_entropy(eval_result["P_ML"], target_bits),
             }
-
             write_results_to_csv(output_dict, results_dir)
 
         os.remove(data_target_file)
