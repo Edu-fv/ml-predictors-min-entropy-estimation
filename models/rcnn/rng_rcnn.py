@@ -37,7 +37,7 @@ process = psutil.Process()
 
 def build_model(config, target_bits=1, scale_factor=1):
     model = Sequential()
-    dim = 2
+    dim = 1
     output_dim = 2**target_bits
 
     if scale_factor == 1:
@@ -194,10 +194,10 @@ def train_model(model, config, evaluation_checkpoints, first_model=None):
     next_checkpoint_idx = 0
     partial_evals = []
 
-    dim = 2
+    dim = 1
 
     if config["target_bits"] == 1:
-        output_dim = dim
+        output_dim = 2
         output_type = bool
     else:
         output_dim = 2 ** config["target_bits"]
@@ -213,7 +213,7 @@ def train_model(model, config, evaluation_checkpoints, first_model=None):
     train_dataset = tf.data.Dataset.from_generator(
         generator=lambda: train_gen,
         output_signature=(
-            tf.TensorSpec(shape=(None, config["seqlen"], dim), dtype=bool),
+            tf.TensorSpec(shape=(None, config["seqlen"], dim), dtype=tf.float32),
             tf.TensorSpec(shape=(None, output_dim), dtype=output_type),
         ),
     )

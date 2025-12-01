@@ -65,8 +65,7 @@ def data_generator(config, epochs=1, start=0.0, end=1.0):
                 n = min(n, batch_size)
                 
                 x_indices = np.arange(n)[:, None] * step + np.arange(seqlen)
-                X = np.zeros((n, seqlen, 2), dtype=bool)
-                X[np.arange(n)[:, None], np.arange(seqlen), mapped_data[x_indices]] = True
+                X = mapped_data[x_indices].reshape(n, seqlen, 1).astype(np.float32)
                 
                 y_start = np.arange(n) * step + seqlen
                 y_bit_indices = y_start[:, None] + np.arange(target_bits)
