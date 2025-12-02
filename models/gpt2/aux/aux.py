@@ -10,8 +10,13 @@ from utils.nice_log import nice_log
 def binary_entropy(p):
     if p == 0 or p == 1:
         return 0.0
-    entropy = -(p * torch.log2(p) + (1 - p) * torch.log2(1 - p))
-    return entropy.item()
+    if isinstance(p, torch.Tensor):
+        entropy = -(p * torch.log2(p) + (1 - p) * torch.log2(1 - p))
+        return entropy.item()
+    else:
+        import math
+        entropy = -(p * math.log2(p) + (1 - p) * math.log2(1 - p))
+        return entropy
 
 
 def log_model_parameters(model):
