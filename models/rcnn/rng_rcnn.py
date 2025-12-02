@@ -10,6 +10,7 @@ import tensorflow as tf
 from tensorflow.keras.layers import Dense, Activation, Dropout, LSTM, Convolution1D
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.losses import BinaryCrossentropy
+from tqdm import tqdm
 
 # Local application/library specific imports
 from .argparser.argparser import parse_arguments
@@ -100,7 +101,7 @@ def evaluate_model(model, config):
     total_cross_entropy = 0
     loss_fn = BinaryCrossentropy(from_logits=False)
 
-    for i in range(config["validation_steps"]):
+    for i in tqdm(range(config["validation_steps"])):
         Xt, yt = next(eval_gen)
         Xt_tensor = tf.convert_to_tensor(Xt, dtype=tf.float32)
         preds = model(Xt_tensor)
@@ -184,13 +185,16 @@ def train_model(model, config, evaluation_checkpoints):
     loss_fn = tf.keras.losses.BinaryCrossentropy(from_logits=False)
     optimizer = tf.keras.optimizers.RMSprop(learning_rate=config["learning_rate"])
 
+    print("-" * 40)
+    print("Training")
+    print("-" * 40)
     nice_log(f"Starting training for {config['epochs']} epoch(s)...")
     
     for epoch in range(config["epochs"]):
         epoch_loss = 0.0
         num_batches = 0
         
-        for i, (x, y) in enumerate(train_dataset):
+        for i, (x, y) in enumerate(tqdm(train_dataset, total=config["steps_per_epoch"])):
             # Incrementing the samples processed
             bytes_processed += (x.shape[0] * x.shape[1]) // 8
             num_batches += 1
@@ -219,15 +223,6 @@ def train_model(model, config, evaluation_checkpoints):
             optimizer.apply_gradients(zip(grads, model.trainable_variables))
             
             epoch_loss += loss_value.numpy()
-            
-            # Log progress every 100 batches
-            if (i + 1) % 100 == 0:
-                avg_loss = epoch_loss / num_batches
-                nice_log(f"Epoch {epoch + 1}/{config['epochs']}, Batch {i + 1}, Avg Loss: {avg_loss:.4f}, Bytes processed: {bytes_processed}")
-        
-        # End of epoch summary
-        if num_batches > 0:
-            nice_log(f"Epoch {epoch + 1} completed - Avg Loss: {epoch_loss / num_batches:.4f}, Total batches: {num_batches}")
 
     training_time = float(timer() - start) / 60
     nice_log(f"Training completed in {training_time:.2f} minutes")
@@ -289,6 +284,9 @@ def main(
     # Save weights after training
     model.save_weights(config["weights_path"])
 
+    print("-" * 40)
+    print("Evaluation")
+    print("-" * 40)
     nice_log("Starting evaluation...")
     partial_evals = evaluate_and_record(model, config, num_bytes, partial_evals)
 
@@ -308,8 +306,6 @@ def main(
 
 if __name__ == "__main__":
     args = parse_arguments()
-
-    nice_log("Arguments: {}".format(args))
 
     model_size_parameters = dict(scale_factor=2)
 

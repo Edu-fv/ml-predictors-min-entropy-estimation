@@ -48,6 +48,9 @@ class NistEntropyAssessment:
                 stderr=stderr
             )
         
+        print("-" * 40)
+        print("NIST SP800-90B Assessment")
+        print("-" * 40)
         print(stdout)
         return parse_entropy_output(stdout)
 
@@ -202,19 +205,20 @@ class ModelRunner:
 
 
 def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0):
-    print("-----------------------------------")
-    formatted_params = "\n".join(
-        f"\t\t{key}: {value}" for key, value in model_param_dict.items()
-    )
-    nice_log(
-        f"\n\t....Running model *** {model_name} *** for....\n"
-        f"\t....{model_param_dict['num_bytes']} bytes,\n"
-        f"\t....with {data_param_dict['target_bits']} target bits,\n"
-        f"\t....with {data_param_dict['corr_intensities']} correlation intensities,\n"
-        f"\t....with parameters:\n{formatted_params}",
-        color="green",
-    )
-    print("-----------------------------------")
+    print("=" * 60)
+    nice_log(f"Running model [{model_name}]", color="green")
+    print(f"  Data: {model_param_dict['num_bytes']} bytes, "
+          f"target_bits={data_param_dict['target_bits']}, "
+          f"corr_intensities={data_param_dict['corr_intensities']}")
+    print(f"  Model params: seqlen={model_param_dict['seqlen']}, "
+          f"step={model_param_dict['step']}, "
+          f"batch_size={model_param_dict['batch_size']}, "
+          f"epochs={model_param_dict['epochs']}, "
+          f"lr={model_param_dict['learning_rate']}")
+    print(f"  Training: train_ratio={model_param_dict['train_ratio']}, "
+          f"is_autoregressive={model_param_dict['is_autoregressive']}, "
+          f"evaluate_all_bits={model_param_dict['evaluate_all_bits']}")
+    print("=" * 60)
     
     results_dir = f"{OUTPUT_FILE_PATH}/{model_name}"
     os.makedirs(results_dir, exist_ok=True)
@@ -293,7 +297,9 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
         if gpu_cooldown > 0 and total_runs > 1:
             time.sleep(gpu_cooldown)
 
-    nice_log(f"Finished running model *** {model_name} ***", color="green")
+    print("=" * 60)
+    nice_log(f"Finished model [{model_name}]", color="green")
+    print("=" * 60)
 
 
 def parse_arguments():

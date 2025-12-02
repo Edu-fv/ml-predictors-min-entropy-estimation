@@ -3,50 +3,16 @@ import sys
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.client import device_lib
 
 utils_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.insert(0, utils_path)
 from utils.nice_log import nice_log
 
 
-def get_available_devices():
-    local_device_protos = device_lib.list_local_devices()
-    return [x.name for x in local_device_protos]
-
-
-def get_available_gpu_memory():
-    gpu_devices = tf.config.list_physical_devices("GPU")
-    if gpu_devices:
-        try:
-            device_name = gpu_devices[0].name.split(":")[-1]  # gets '0'
-            device_name = f"GPU:{device_name}"  # constructs 'GPU:0'
-            gpu_memory_info = tf.config.experimental.get_memory_info(device_name)
-            available_memory = gpu_memory_info["current"]
-            return available_memory
-        except RuntimeError as e:
-            print(e)
-    return 0
-
-
-def get_memory_usage():
-    local_device_protos = device_lib.list_local_devices()
-    for device in local_device_protos:
-        if "GPU" in device.device_type:
-            print(f"Device: {device.name}")
-            print(f"Total Memory: {device.memory_limit/(1024*1024)} MB")
-            print("-------------------------------------------------------")
-
-
 def gpu_config(memory_fraction=0.5):
-    # GPU config
     num_gpus = len(tf.config.list_physical_devices("GPU"))
     if num_gpus > 0:
-        nice_log(f"Num GPUs Available: {num_gpus}")
-        nice_log(f"Available devices: {get_available_devices()}")
-        available_memory = get_available_gpu_memory()
-        nice_log(f"Available GPU memory: {available_memory} bytes")
-        get_memory_usage()
+        nice_log(f"GPUs available: {num_gpus}")
     else:
         nice_log("No GPUs available.")
 
@@ -123,6 +89,9 @@ def log_model_parameters(model):
         [tf.keras.backend.count_params(w) for w in model.non_trainable_weights]
     )
 
+    print("-" * 40)
+    print("Model Architecture")
+    print("-" * 40)
     nice_log(f"Total parameters: {total_parameters}")
     nice_log(f"Trainable parameters: {trainable_parameters}")
     nice_log(f"Non-trainable parameters: {non_trainable_parameters}")
@@ -133,7 +102,6 @@ def log_model_parameters(model):
 def check_test_to_classes_ratio(train_ratio, test_ratio, config, target_bits):
     test_sequences = (test_ratio / train_ratio) * config["total_train_samples"]
     test_to_classes_ratio = test_sequences / (2**target_bits)
-    nice_log(f"Test to classes ratio: {test_to_classes_ratio}")
     if test_to_classes_ratio < 1:
         raise ValueError("Test to classes ratio must be greater than 1")
 

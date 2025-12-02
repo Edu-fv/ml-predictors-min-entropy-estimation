@@ -19,6 +19,9 @@ def log_model_parameters(model):
     trainable_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     non_trainable_parameters = total_parameters - trainable_parameters
 
+    print("-" * 40)
+    print("Model Architecture")
+    print("-" * 40)
     nice_log(f"Total parameters: {total_parameters}")
     nice_log(f"Trainable parameters: {trainable_parameters}")
     nice_log(f"Non-trainable parameters: {non_trainable_parameters}")

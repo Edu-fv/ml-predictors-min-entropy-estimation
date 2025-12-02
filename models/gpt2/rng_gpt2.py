@@ -82,6 +82,10 @@ def train_model(
     loss_fn = torch.nn.CrossEntropyLoss()
     scaler = torch.amp.GradScaler("cuda")
 
+    print("-" * 40)
+    print("Training")
+    print("-" * 40)
+    nice_log(f"Starting training for {config['epochs']} epoch(s)...")
     model.train()
 
     for epoch in range(config["epochs"]):
@@ -271,9 +275,7 @@ def main(
         evaluate_all_bits,
     )
 
-    print(torch.__version__)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
 
     # Load and prepare data
     train_data, eval_data = load_and_prepare_data(config)
@@ -297,6 +299,9 @@ def main(
     # Save model
     save_model(model, config["weights_path"])
     # Final evaluation
+    print("-" * 40)
+    print("Evaluation")
+    print("-" * 40)
     nice_log("Starting evaluation...")
     eval_results = evaluate_model(
         model, config, eval_data, device, target_bits=target_bits
