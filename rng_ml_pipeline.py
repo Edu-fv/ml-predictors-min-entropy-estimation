@@ -160,15 +160,15 @@ class ModelRunner:
             "model_size_parameters": lambda p: {
                 "n_positions": p["seqlen"],
                 "n_ctx": p["seqlen"],
-                "n_embd": 768,
-                "n_layer": 12,
-                "n_head": 12,
+                "n_embd": 256,   # embedding dimension
+                "n_layer": 3,    # transformer layers
+                "n_head": 4,     # attention heads
             },
             "remove_keys": [],
         },
         "rcnn": {
             "batch_size": 2 * 10**3,
-            "model_size_parameters": lambda p: {"scale_factor": 2},
+            "model_size_parameters": lambda p: {"scale_factor": 1},
             "remove_keys": ["is_autoregressive", "evaluate_all_bits"],
         },
     }
