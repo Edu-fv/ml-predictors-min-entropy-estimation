@@ -7,7 +7,14 @@ import subprocess
 import numpy as np
 
 from utils.nice_log import nice_log
-import autoregressive_process.autoregressive_process as arp
+from gbarp_gen.python import (
+    gbAR,
+    point_to_point_alpha,
+    constant_alpha,
+    exponentially_decreasing_alpha,
+    gaussian_alpha,
+)
+from entropy_limits import ar_min_entropy_limit
 from parsers.entropy_parsers import parse_entropy_output
 
 OUTPUT_FILE_PATH = "./results"
@@ -111,17 +118,17 @@ def generate_gbAR_random_bytes(alpha_scaling_factor, data_param_dict, beta, num_
     distance_scale_p = data_param_dict["distance_scale_p"]
     autocorrelation_function = data_param_dict["autocorrelation_function"]
     if autocorrelation_function == "point-to-point":
-        alpha = arp.point_to_point_alpha(distance_scale_p, alpha_scaling_factor)
+        alpha = point_to_point_alpha(distance_scale_p, alpha_scaling_factor)
     elif autocorrelation_function == "constant":
-        alpha = arp.constant_alpha(distance_scale_p, alpha_scaling_factor)
+        alpha = constant_alpha(distance_scale_p, alpha_scaling_factor)
     elif autocorrelation_function == "exponential":
-        alpha = arp.exponentially_decreasing_alpha(
+        alpha = exponentially_decreasing_alpha(
             distance_scale_p,
             alpha_scaling_factor,
             decay_rate=data_param_dict["exponential_decay_rate"],
         )
     elif autocorrelation_function == "gaussian":
-        alpha = arp.gaussian_alpha(
+        alpha = gaussian_alpha(
             distance_scale_p,
             alpha_scaling_factor,
             data_param_dict["gaussian_sigma"],
@@ -129,13 +136,13 @@ def generate_gbAR_random_bytes(alpha_scaling_factor, data_param_dict, beta, num_
         )
     elif "constant_" in autocorrelation_function:
         signs = data_param_dict["signs"]
-        alpha = arp.constant_alpha(distance_scale_p, alpha_scaling_factor, signs=signs)
+        alpha = constant_alpha(distance_scale_p, alpha_scaling_factor, signs=signs)
     else:
         raise ValueError("Unknown autocorrelation function.")
 
     assert beta >= 0
     assert np.sum(np.abs(alpha)) + beta - 1 < 1e-10
-    return arp.gbAR(alpha, beta, num_bytes), alpha
+    return gbAR(alpha, beta, num_bytes), alpha
 
 
 def generate_evaluation_checkpoints(start_order, end_order, num_points_per_order=2):
@@ -202,7 +209,7 @@ class ModelRunner:
             self._module = module
         return self._module
     
-    def run(self, params):
+    def run(self, params, distillation_mode=None, distillation_config=None):
         module = self._load_module()
         run_params = params.copy()
         
@@ -214,10 +221,17 @@ class ModelRunner:
         
         run_params["model_size_parameters"] = self.config["model_size_parameters"](run_params)
         
+        if distillation_mode is not None:
+            from distillation import get_strategy, DistillationTrainer
+            strategy = get_strategy(distillation_mode, **(distillation_config or {}))
+            trainer = DistillationTrainer(strategy, distillation_config)
+            return trainer.run(module, run_params)
+        
         return module.main(**run_params)
 
 
-def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0):
+def main(model_param_dict, data_param_dict, model_name, hardware,
+         gpu_cooldown=0, distillation_mode=None, distillation_config=None):
     print("=" * 60)
     nice_log(f"Running model [{model_name}]", color="green")
     print(f"  Data: {model_param_dict['num_bytes']} bytes, "
@@ -256,10 +270,14 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
         save_random_data(random_bytes, data_target_file, sample_target_file)
         
         p_c_source = calculate_p_c(random_bytes)
-        min_entropy_th = arp.ar_min_entropy_limit(beta)
+        min_entropy_th = ar_min_entropy_limit(beta)
         
         nist = NistEntropyAssessment(sample_target_file).start()
-        ml_results = model_runner.run(model_param_dict)
+        ml_results = model_runner.run(
+            model_param_dict,
+            distillation_mode=distillation_mode,
+            distillation_config=distillation_config,
+        )
         entropies_dict = nist.wait()
 
         base_result = {
@@ -283,10 +301,21 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
             "gaussian_sigma": data_param_dict["gaussian_sigma"],
             "p_c_source": p_c_source,
             "min_entropy_th": min_entropy_th,
+            "distillation_mode": distillation_mode or "-",
             **entropies_dict,
         }
+        if distillation_mode == "vad":
+            base_result["tau_start"] = distillation_config["tau_start"]
+            base_result["tau_end"] = distillation_config["tau_end"]
+            base_result["tau_progression"] = distillation_config["tau_progression"]
+        else:
+            base_result["tau_start"] = "-"
+            base_result["tau_end"] = "-"
+            base_result["tau_progression"] = "-"
 
-        ml_info = {k: v for k, v in ml_results.items() if k != "eval_results"}
+
+        ml_info = {k: v for k, v in ml_results.items()
+                   if k not in ("eval_results", "teacher_eval")}
 
         for partial_eval in ml_results["eval_results"]:
             eval_result = partial_eval["eval"]
@@ -302,6 +331,13 @@ def main(model_param_dict, data_param_dict, model_name, hardware, gpu_cooldown=0
                 "bytes_processed_eval": partial_eval["bytes_processed_eval"],
                 "min_entropy_estimated": experimental_min_entropy(eval_result["p_ml"], target_bits),
             }
+
+            # Include teacher metrics when in distillation mode
+            teacher_eval = ml_results.get("teacher_eval")
+            if teacher_eval is not None:
+                output_dict["teacher_p_ml"] = teacher_eval["p_ml"]
+                output_dict["teacher_ce_loss"] = teacher_eval["bin_cross-entropy_loss"]
+
             write_results_to_csv(output_dict, results_dir)
 
         os.remove(data_target_file)
@@ -390,6 +426,50 @@ def parse_arguments():
         type=int,
         default=0,
         help="Seconds to wait between runs for GPU cooldown (default: 0, use 180 for production)",
+    )
+    parser.add_argument(
+        "--distillation_mode",
+        type=str,
+        default=None,
+        choices=["rad", "vad", "irbc"],
+        help="Distillation strategy: rad (REINFORCE), vad (Gumbel-Softmax), irbc (Behaviour Cloning)",
+    )
+    parser.add_argument(
+        "--distillation_steps",
+        type=int,
+        default=5,
+        help="Number of autoregressive rollout steps for distillation (default: 5)",
+    )
+    parser.add_argument(
+        "--distillation_lr",
+        type=float,
+        default=None,
+        help="Learning rate for student distillation (default: same as --learning_rate)",
+    )
+    parser.add_argument(
+        "--distillation_epochs",
+        type=int,
+        default=None,
+        help="Epochs for student distillation (default: same as --epochs)",
+    )
+    parser.add_argument(
+        "--vad_tau_start",
+        type=float,
+        default=1.0,
+        help="Tau start for VAD distillation",
+    )
+    parser.add_argument(
+        "--vad_tau_end",
+        type=float,
+        default=0.1,
+        help="Tau end for VAD distillation",
+    )
+    parser.add_argument(
+        "--vad_tau_progression",
+        type=str,
+        default="linear",
+        choices=["linear", "exp"],
+        help="Tau progression type for VAD distillation: \"linear\" or \"exp\"(exponential)",
     )
     args = parser.parse_args()
 
@@ -496,10 +576,29 @@ if __name__ == "__main__":
         "gaussian_sigma": gaussian_sigma,
     }
 
+    # Build distillation config from CLI args (only if distillation_mode is set)
+    distillation_config = None
+    if args.distillation_mode is not None:
+        distillation_config = {
+            "num_steps": args.distillation_steps,
+        }
+        if args.distillation_lr is not None:
+            distillation_config["learning_rate"] = args.distillation_lr
+        if args.distillation_epochs is not None:
+            distillation_config["epochs"] = args.distillation_epochs
+        if args.distillation_mode == "vad":
+            if args.vad_tau_start < args.vad_tau_end:
+                raise ValueError("vad_tau_start must be larger than vad_tau_end")
+            distillation_config["tau_start"] = args.vad_tau_start
+            distillation_config["tau_end"] = args.vad_tau_end
+            distillation_config["tau_progression"] = args.vad_tau_progression
+
     main(
         model_param_dict,
         data_param_dict,
         args.model_name,
         args.hardware,
         gpu_cooldown=args.gpu_cooldown,
+        distillation_mode=args.distillation_mode,
+        distillation_config=distillation_config,
     )
