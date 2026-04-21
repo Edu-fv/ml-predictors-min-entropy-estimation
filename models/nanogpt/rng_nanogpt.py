@@ -88,13 +88,12 @@ def build_model(
     )
     
     model = NanoGPTWrapper(gpt_config)
-    student_model = NanoGPTWrapper(gpt_config)
+
     # Multi-GPU support
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
-        student_model = torch.nn.DataParallel(student_model)
-
-    return model, student_model
+    
+    return model
 
 
 def train_model(
@@ -153,7 +152,7 @@ def train_model(
     for epoch in range(config["epochs"]):
         epoch_loss = 0.0
         optimizer.zero_grad()
-
+        
         for i, (x, y) in enumerate(tqdm(data)):
             x = x.to(device)
             y = y.to(device)
@@ -208,103 +207,6 @@ def train_model(
 
     training_time = float(timer() - start) / 60
     nice_log(f"Training completed in {training_time:.2f} minutes")
-    return training_time, partial_evals
-
-def distillation_loss(student_logits, teacher_logits, targets, T=5.0, alpha=0.7):
-    soft_teacher = torch.nn.functional.softmax(teacher_logits / T, dim=1)
-    soft_student = torch.nn.functional.log_softmax(student_logits / T, dim=1)
-    loss_soft = torch.nn.functional.kl_div(soft_student, soft_teacher, reduction='batchmean') * (T * T)    
-
-    loss_hard = torch.nn.functional.cross_entropy(student_logits, targets)
-
-    return alpha * loss_hard + (1.0 - alpha) * loss_soft
-
-
-
-
-# TODO: terminar el modelo estudiante
-def train_student_model(
-    student,
-    teacher,
-    config,
-    data,
-    device,
-    evaluation_checkpoints,
-    eval_data,
-    target_bits=1,
-    accumulation_steps=4,
-):
-    teacher.to(device)
-    student.to(device)
-    optimizer = torch.optim.AdamW(student.parameters(), lr=config["learning_rate"])
-    scaler = torch.amp.GradScaler("cuda")
-    teacher.eval()
-    student.train()
-    partial_evals = []
-    start = timer()
-    bytes_processed, next_checkpoint_idx = 0, 0
-    for epoch in range(config["epochs"]):
-        epoch_loss = 0.0
-        optimizer.zero_grad()
-
-        for i, (x, y) in enumerate(tqdm(data)):
-            x = x.to(device)
-            y = y.to(device)
-
-            number_of_bytes_in_batch = (x.shape[0] * x.shape[1]) // 8
-            bytes_processed += number_of_bytes_in_batch
-
-            # Mixed precision training
-            with torch.amp.autocast("cuda"):
-                with torch.no_grad():
-                    output_teacher = teacher(x)
-                logits_teacher = output_teacher.logits.view(-1, 2**target_bits)
-                target = y.view(-1)
-                output_student = student(x)
-                logits_student = output_student.logits.view(-1, 2**target_bits)
-
-
-                loss_student = distillation_loss(logits_student, logits_teacher, target, alpha=0.9)
-
-            # Gradient scaling for mixed precision
-            scaler.scale(loss_student).backward()
-
-            # Gradient accumulation
-            if (i + 1) % accumulation_steps == 0:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad()
-
-            epoch_loss += loss_student.item()
-
-            # Intermediate evaluation checkpoints
-            while (
-                next_checkpoint_idx < len(evaluation_checkpoints)
-                and bytes_processed >= evaluation_checkpoints[next_checkpoint_idx]
-            ):
-                eval_results = evaluate_model(
-                    student, config, eval_data, device, target_bits=config["target_bits"]
-                )
-                checkpoint_data = {
-                    "eval": eval_results,
-                    "bytes_processed_eval": bytes_processed,
-                }
-                partial_evals.append(checkpoint_data)
-                next_checkpoint_idx += 1
-                time.sleep(60)
-
-            # Input validation
-            if (
-                torch.isnan(x).any()
-                or torch.isinf(x).any()
-                or torch.isnan(y).any()
-                or torch.isinf(y).any()
-            ):
-                raise Exception("Invalid values found in input data")
-    training_time = float(timer() - start) / 60
-    nice_log(f"Student Training completed in {training_time:.2f} minutes")
     return training_time, partial_evals
 
 
@@ -395,7 +297,6 @@ def evaluate_model(model, config, data, device, target_bits=1):
     return results
 
 
-
 def main(
     filename,
     generator,
@@ -462,8 +363,8 @@ def main(
     validation_steps = len(eval_data)
 
     # Build model
-    model, student_model = build_model(config, **model_size_parameters, target_bits=target_bits)
-    model_parameters = log_model_parameters(student_model)
+    model = build_model(config, **model_size_parameters, target_bits=target_bits)
+    model_parameters = log_model_parameters(model)
 
     # Train model
     training_time, partial_evals = train_model(
@@ -475,55 +376,31 @@ def main(
         eval_data,
         target_bits=target_bits,
     )
-
-    # Train model
-    training_time_student, partial_evals_student = train_student_model(
-        student_model,
-        model,
-        config,
-        train_data,
-        device,
-        evaluation_checkpoints,
-        eval_data,
-        target_bits=target_bits,
-    )
-
+    
     # Save model
     save_model(model, config["weights_path"])
-    save_model(student_model, config["weights_path"][:-4]+"_student.pth")
     
     # Final evaluation
     print("-" * 40)
     print("Evaluation")
     print("-" * 40)
-    nice_log("Starting teacher evaluation...")
-
+    nice_log("Starting evaluation...")
     eval_results = evaluate_model(
         model, config, eval_data, device, target_bits=target_bits
     )
-
-    # Final evaluation
-    print("-" * 40)
-    print("Evaluation")
-    print("-" * 40)
-    nice_log("Starting student evaluation...")
-
-    eval_results_student = evaluate_model(
-        student_model, config, eval_data, device, target_bits=target_bits
-    )
     final_checkpoint_data = {
-        "eval": eval_results_student,
+        "eval": eval_results,
         "bytes_processed_eval": num_bytes,
     }
-    partial_evals_student.append(final_checkpoint_data)
+    partial_evals.append(final_checkpoint_data)
 
     total_train_samples = (
         int(num_bytes * train_ratio) - int(np.ceil(seqlen / 8))
     ) // step
     
     output_dict = {
-        "training_time": training_time_student,
-        "eval_results": partial_evals_student,
+        "training_time": training_time,
+        "eval_results": partial_evals,
         "total_parameters": model_parameters[0],
         "trainable_parameters": model_parameters[1],
         "non_trainable_parameters": model_parameters[2],
@@ -532,9 +409,6 @@ def main(
         "steps_per_epoch": steps_per_epoch,
         "validation_steps": validation_steps,
     }
-
-
-
 
     return output_dict
 
