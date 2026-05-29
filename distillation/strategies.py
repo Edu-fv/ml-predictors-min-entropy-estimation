@@ -161,7 +161,7 @@ class IRBCStrategy(DistillationStrategy):
         target = candidates[:, :, -visible_T:]
         target = target.reshape(B * C, visible_T)
 
-        
+
         log_probs = torch.log_softmax(pred_logits, dim=-1)
 
         token_log_probs = log_probs.gather(
@@ -298,6 +298,16 @@ class IRBCStrategy(DistillationStrategy):
             [x, best_sequences],
             dim=1
         )
+
+
+        block_size = student.config.block_size
+
+        full_input = full_input[:, -block_size:]
+
+
+        seq_len = full_input.shape[1]
+
+
 
         logits = student(full_input).logits
 
