@@ -142,10 +142,19 @@ class IRBCStrategy(DistillationStrategy):
         # [B*C, L]
         full_seq = full_seq.reshape(B * C, -1)
 
+
+        block_size = model.config.block_size
+
+        full_seq = full_seq[:, -block_size:]
+
+
+        seq_len = full_seq.shape[1]
+
+
         logits = model(full_seq).logits
 
-        # Predict candidate bits only
-        pred_logits = logits[:, x_len - 1:-1, :]
+        # targets are last T tokens
+        pred_logits = logits[:, seq_len - T - 1:seq_len - 1, :]
 
         target = candidates.reshape(B * C, T)
 
