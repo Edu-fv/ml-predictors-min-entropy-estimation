@@ -318,7 +318,7 @@ class IRBCStrategy(DistillationStrategy):
 
         # [B, T, 2]
 
-        loss = torch.functional.cross_entropy(
+        loss = torch.cross_entropy(
             pred_logits.reshape(-1, 2),
             best_sequences.reshape(-1),
         )
