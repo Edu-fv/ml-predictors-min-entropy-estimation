@@ -153,11 +153,15 @@ class IRBCStrategy(DistillationStrategy):
 
         logits = model(full_seq).logits
 
+        visible_T = min(T, seq_len - 1)
+
         # targets are last T tokens
-        pred_logits = logits[:, seq_len - T - 1:seq_len - 1, :]
+        pred_logits = logits[:, -visible_T - 1: - 1, :]
 
-        target = candidates.reshape(B * C, T)
+        target = candidates[:, :, -visible_T:]
+        target = target.reshape(B * C, visible_T)
 
+        
         log_probs = torch.log_softmax(pred_logits, dim=-1)
 
         token_log_probs = log_probs.gather(
