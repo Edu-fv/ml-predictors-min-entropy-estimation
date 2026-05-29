@@ -325,5 +325,5 @@ class IRBCStrategy(DistillationStrategy):
             best_sequences.reshape(-1),
         )
 
-        return output.mean
+        return output.mean()
 
