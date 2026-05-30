@@ -114,7 +114,7 @@ class VADStrategy(DistillationStrategy):
 class IRBCStrategy(DistillationStrategy):
     """Iterative Refinement + Behaviour Cloning (not yet implemented)."""
 
-    def __init__(self, num_steps=5, num_candidates=16, tau=0.7, refinement_method="coordinate_ascent", **kwargs):
+    def __init__(self, num_steps=5, num_candidates=4, tau=0.7, refinement_method="coordinate_ascent", **kwargs):
         self.num_steps = num_steps
         self.num_candidates = num_candidates
         self.tau = tau
@@ -170,9 +170,7 @@ class IRBCStrategy(DistillationStrategy):
         current_scores = self.sequence_logprob(model, x, current)
 
         for _ in range(self.num_steps):
-
             for bit_idx in range(T):
-
                 proposal = current.clone()
 
                 proposal[:, :, bit_idx] = (1 - proposal[:, :, bit_idx])
@@ -182,7 +180,6 @@ class IRBCStrategy(DistillationStrategy):
 
                 current[improved, :] = proposal[improved, :]
                 current_scores[improved] = proposal_scores[improved]
-
         return current, current_scores
 
     def refine_samples(self, model, x, candidates):
