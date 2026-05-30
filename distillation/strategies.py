@@ -87,11 +87,7 @@ class VADStrategy(DistillationStrategy):
         self.__current_tau = new_tau if new_tau >= self.tau_end else self.tau_end
 
     def compute_loss(self, student, teacher, x, y, config, device):
-        batch_size = x.size(0)
-        target_bits = config["target_bits"]
         eps = 1e-10
-        log_probs = []
-        joint_prob = torch.ones(batch_size, device=device)
         current_x = x.clone()
         rewards = []
         for step in range(self.num_steps):
@@ -129,17 +125,10 @@ class IRBCStrategy(DistillationStrategy):
     def sequence_logprob(self, model, x, candidates):
         B, C, T = candidates.shape
 
-        x_len = x.shape[1]
-
-        # repeat prompts
         x_rep = x.unsqueeze(1).repeat(1, C, 1)
 
-        full_seq = torch.cat(
-            [x_rep, candidates],
-            dim=-1
-        )
+        full_seq = torch.cat([x_rep, candidates], dim=-1)
 
-        # [B*C, L]
         full_seq = full_seq.reshape(B * C, -1)
 
 
@@ -155,7 +144,6 @@ class IRBCStrategy(DistillationStrategy):
 
         visible_T = min(T, seq_len - 1)
 
-        # targets are last T tokens
         pred_logits = logits[:, -visible_T - 1: - 1, :]
 
         target = candidates[:, :, -visible_T:]
@@ -164,10 +152,7 @@ class IRBCStrategy(DistillationStrategy):
 
         log_probs = torch.log_softmax(pred_logits, dim=-1)
 
-        token_log_probs = log_probs.gather(
-            -1,
-            target.unsqueeze(-1)
-        ).squeeze(-1)
+        token_log_probs = log_probs.gather(-1, target.unsqueeze(-1)).squeeze(-1)
 
         seq_log_probs = token_log_probs.sum(dim=-1)
 
@@ -176,60 +161,21 @@ class IRBCStrategy(DistillationStrategy):
 
 
     @torch.no_grad()
-    def sample_sequences(self, model, x, batch_size, seq_len, device):
-
-        """# Repeat prompts for all candidates
-        x_local = x.unsqueeze(1).repeat(1, self.num_candidates, 1)
-
-        # [B, C, L] -> [B*C, L]
-        x_local = x_local.reshape(batch_size * self.num_candidates, -1)
-
-        generated = []
-
-        for _ in range(target_bits):
-
-            logits = model(x_local)
-            # assume logits shape:
-            # [B*C, seq_len, 2]
-
-            next_logits = logits[:, -1, :]  # [B*C, 2]
-
-            # temperature scaling
-            next_logits = next_logits / self.tau
-
-            probs = torch.functional.softmax(next_logits, dim=-1)
-
-            next_bit = torch.multinomial(probs, num_samples=1)
-
-            generated.append(next_bit)
-
-            x_local = torch.cat([x_local, next_bit], dim=1)
-
-        generated = torch.cat(generated, dim=1)
-
-        generated = generated.view(
-            batch_size,
-            self.num_candidates,
-            target_bits
-        )
-
-        return generated""" 
-           
-        with torch.no_grad():
-            samples = []
-            for candidate in range(self.num_candidates):
-                current_sample = torch.ones(batch_size,seq_len, device=device, dtype=torch.long)
-                for bit in range(seq_len):
-                    teacher_out = model(x)
-                    teacher_logits = teacher_out.logits[:, -1, :]
-                    sample_probs = torch.softmax(teacher_logits/self.tau, dim=-1)
-                    current_sample[:, bit] = torch.multinomial(sample_probs, num_samples=1).squeeze(-1)
-                samples.append(current_sample)
+    def sample_sequences(self, model, x, batch_size, seq_len, device):           
+        samples = []
+        for candidate in range(self.num_candidates):
+            current_sample = torch.ones(batch_size,seq_len, device=device, dtype=torch.long)
+            for bit in range(seq_len):
+                teacher_out = model(x)
+                teacher_logits = teacher_out.logits[:, -1, :]
+                sample_probs = torch.softmax(teacher_logits/self.tau, dim=-1)
+                current_sample[:, bit] = torch.multinomial(sample_probs, num_samples=1).squeeze(-1)
+            samples.append(current_sample)
         return torch.stack(samples, dim=1)
 
 
     def coordinate_ascent(self, model, x, candidates):
-        B, C, T = candidates.shape
+        T = candidates.shape[2]
 
         current = candidates.clone()
 
@@ -245,16 +191,8 @@ class IRBCStrategy(DistillationStrategy):
 
                 proposal = current.clone()
 
-                # flip bit
-                proposal[:, :, bit_idx] = (
-                    1 - proposal[:, :, bit_idx]
-                )
-
-                proposal_scores = self.sequence_logprob(
-                    model,
-                    x,
-                    proposal,
-                )
+                proposal[:, :, bit_idx] = (1 - proposal[:, :, bit_idx])
+                proposal_scores = self.sequence_logprob(model, x, proposal,)
 
                 improved = proposal_scores > current_scores
 
@@ -268,66 +206,33 @@ class IRBCStrategy(DistillationStrategy):
             return self.coordinate_ascent(model, x, candidates)
 
     def compute_loss(self, student, teacher, x, y, config, device):
-        """raise NotImplementedError(
-            "IRBC: teacher sampling + cloning not yet implemented."
-        )
-        """        
         batch_size = config["batch_size"]
-        target_bits = config["target_bits"]
         seq_len = config["seqlen"]
         
         candidates = self.sample_sequences(teacher, x, batch_size, seq_len, device)
-
         refined_candidates, scores = self.refine_samples(teacher, x, candidates)
-
         best_idx = scores.argmax(dim=1)
+        B, x_len = x.shape[:2]
+        best_sequences = refined_candidates[torch.arange(B), best_idx]
 
-        B = x.shape[0]
-
-        best_sequences = refined_candidates[
-            torch.arange(B),
-            best_idx
-        ]
-
-
-
-        B, T = best_sequences.shape
-
-        # teacher-forced input
-        full_input = torch.cat(
-            [x, best_sequences],
-            dim=1
-        )
-
-
+        full_input = torch.cat([x, best_sequences], dim=1)
         block_size = student.config.block_size
-
         full_input = full_input[:, -block_size:]
-
-
         seq_len = full_input.shape[1]
 
-
-
         logits = student(full_input).logits
+        pred_logits = logits[:, - x_len - 1:-1, :]
 
-        prompt_len = x.shape[1]
-
-        # logits predicting target bits
-        pred_logits = logits[:, - prompt_len - 1:-1, :]
-
-        # [B, T, 2]
+        targets = best_sequences[:, 1:]
 
         print("full_seq", full_input.shape)
         print("logits", logits.shape)
         print("pred_logits", pred_logits.shape)
-        print("targets", best_sequences.shape)
+        print("best_sequences", best_sequences.shape)        
+        print("targets", targets.shape)
 
         loss = torch.nn.CrossEntropyLoss()
-        output = loss(
-            pred_logits.reshape(-1, 2),
-            best_sequences.reshape(-1),
-        )
+        output = loss(pred_logits.reshape(-1, 2), targets.reshape(-1))
 
         return output.mean()
 
