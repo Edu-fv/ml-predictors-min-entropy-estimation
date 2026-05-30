@@ -209,10 +209,10 @@ class IRBCStrategy(DistillationStrategy):
         batch_size = config["batch_size"]
         seq_len = config["seqlen"]
         
+        B, x_len = x.shape[:2]
         candidates = self.sample_sequences(teacher, x, batch_size, seq_len, device)
         refined_candidates, scores = self.refine_samples(teacher, x, candidates)
         best_idx = scores.argmax(dim=1)
-        B, x_len = x.shape[:2]
         best_sequences = refined_candidates[torch.arange(B), best_idx]
 
         full_input = torch.cat([x, best_sequences], dim=1)
