@@ -318,6 +318,10 @@ class IRBCStrategy(DistillationStrategy):
 
         # [B, T, 2]
 
+        print("full_seq", full_input.shape)
+        print("logits", logits.shape)
+        print("pred_logits", pred_logits.shape)
+        print("targets", best_sequences.shape)
 
         loss = torch.nn.CrossEntropyLoss()
         output = loss(
