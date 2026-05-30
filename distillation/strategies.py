@@ -314,7 +314,7 @@ class IRBCStrategy(DistillationStrategy):
         prompt_len = x.shape[1]
 
         # logits predicting target bits
-        pred_logits = logits[:, prompt_len - 1:-1, :]
+        pred_logits = logits[:, - prompt_len - 1:-1, :]
 
         # [B, T, 2]
 
