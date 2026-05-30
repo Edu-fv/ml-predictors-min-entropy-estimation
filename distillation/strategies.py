@@ -126,34 +126,22 @@ class IRBCStrategy(DistillationStrategy):
         B, C, T = candidates.shape
 
         x_rep = x.unsqueeze(1).repeat(1, C, 1)
-
         full_seq = torch.cat([x_rep, candidates], dim=-1)
-
         full_seq = full_seq.reshape(B * C, -1)
 
-
         block_size = model.config.block_size
-
         full_seq = full_seq[:, -block_size:]
-
-
         seq_len = full_seq.shape[1]
-
-
-        logits = model(full_seq).logits
-
         visible_T = min(T, seq_len - 1)
 
+        logits = model(full_seq).logits
         pred_logits = logits[:, -visible_T - 1: - 1, :]
 
         target = candidates[:, :, -visible_T:]
         target = target.reshape(B * C, visible_T)
 
-
         log_probs = torch.log_softmax(pred_logits, dim=-1)
-
         token_log_probs = log_probs.gather(-1, target.unsqueeze(-1)).squeeze(-1)
-
         seq_log_probs = token_log_probs.sum(dim=-1)
 
         return seq_log_probs.view(B, C)
@@ -179,11 +167,7 @@ class IRBCStrategy(DistillationStrategy):
 
         current = candidates.clone()
 
-        current_scores = self.sequence_logprob(
-            model,
-            x,
-            current,
-        )
+        current_scores = self.sequence_logprob(model, x, current)
 
         for _ in range(self.num_steps):
 
@@ -225,14 +209,7 @@ class IRBCStrategy(DistillationStrategy):
 
         targets = best_sequences[:, 1:]
 
-        print("full_seq", full_input.shape)
-        print("logits", logits.shape)
-        print("pred_logits", pred_logits.shape)
-        print("best_sequences", best_sequences.shape)        
-        print("targets", targets.shape)
-
         loss = torch.nn.CrossEntropyLoss()
         output = loss(pred_logits.reshape(-1, 2), targets.reshape(-1))
 
         return output.mean()
-
