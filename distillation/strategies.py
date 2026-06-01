@@ -134,6 +134,8 @@ class IRBCStrategy(DistillationStrategy):
         seq_len = full_seq.shape[1]
         visible_T = min(T, seq_len - 1)
 
+        print(full_seq.shape)
+
         logits = model(full_seq).logits
         pred_logits = logits[:, -visible_T - 1: - 1, :]
 
@@ -164,9 +166,7 @@ class IRBCStrategy(DistillationStrategy):
 
     def coordinate_ascent(self, model, x, candidates):
         T = candidates.shape[2]
-
         current = candidates.clone()
-
         current_scores = self.sequence_logprob(model, x, current)
 
         for _ in range(self.num_steps):
