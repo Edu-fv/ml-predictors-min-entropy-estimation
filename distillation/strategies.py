@@ -136,7 +136,8 @@ class IRBCStrategy(DistillationStrategy):
 
         print(full_seq.shape)
 
-        logits = model(full_seq).logits
+        output = model(full_seq)
+        logits = output.logits
         pred_logits = logits[:, -visible_T - 1: - 1, :]
 
         target = candidates[:, :, -visible_T:]
@@ -153,6 +154,7 @@ class IRBCStrategy(DistillationStrategy):
     @torch.no_grad()
     def sample_sequences(self, model, x, batch_size, seq_len, device):           
         samples = []
+        print("shape of x:", x.shape)
         for candidate in range(self.num_candidates):
             current_sample = torch.ones(batch_size,seq_len, device=device, dtype=torch.long)
             for bit in range(seq_len):
