@@ -125,8 +125,9 @@ class IRBCStrategy(DistillationStrategy):
     def sequence_logprob(self, model, x, candidates):
         B, C, T = candidates.shape
 
+        current_candidates = candidates.clone()
         x_rep = x.unsqueeze(1).repeat(1, C, 1)
-        full_seq = torch.cat([x_rep, candidates], dim=-1)
+        full_seq = torch.cat([x_rep, current_candidates], dim=-1)
         full_seq = full_seq.reshape(B * C, -1)
 
         block_size = model.config.block_size
@@ -134,13 +135,11 @@ class IRBCStrategy(DistillationStrategy):
         seq_len = full_seq.shape[1]
         visible_T = min(T, seq_len - 1)
 
-        print(full_seq.shape)
-
         output = model(full_seq)
         logits = output.logits
         pred_logits = logits[:, -visible_T - 1: - 1, :]
 
-        target = candidates[:, :, -visible_T:]
+        target = current_candidates[:, :, -visible_T:]
         target = target.reshape(B * C, visible_T)
 
         log_probs = torch.log_softmax(pred_logits, dim=-1)
@@ -154,7 +153,6 @@ class IRBCStrategy(DistillationStrategy):
     @torch.no_grad()
     def sample_sequences(self, model, x, batch_size, seq_len, device):           
         samples = []
-        print("shape of x:", x.shape)
         for candidate in range(self.num_candidates):
             current_sample = torch.ones(batch_size,seq_len, device=device, dtype=torch.long)
             for bit in range(seq_len):
@@ -166,7 +164,7 @@ class IRBCStrategy(DistillationStrategy):
         return torch.stack(samples, dim=1)
 
 
-    def coordinate_ascent(self, model, x, candidates):
+    def coordinate_ascent(self, model, x, candidates, target_bits):
         T = candidates.shape[2]
         current = candidates.clone()
         current_scores = self.sequence_logprob(model, x, current)
@@ -175,8 +173,11 @@ class IRBCStrategy(DistillationStrategy):
             for bit_idx in range(T):
                 proposal = current.clone()
 
-                proposal[:, :, bit_idx] = (1 - proposal[:, :, bit_idx])
-                proposal_scores = self.sequence_logprob(model, x, proposal,)
+                bit_flipped = (1 - proposal[:, :, bit_idx])
+                bit_flipped = torch.where(bit_flipped < 0, bit_flipped + 2**target_bits, bit_flipped)
+
+                proposal[:, :, bit_idx] = bit_flipped
+                proposal_scores = self.sequence_logprob(model, x, proposal)
 
                 improved = proposal_scores > current_scores
 
@@ -184,17 +185,18 @@ class IRBCStrategy(DistillationStrategy):
                 current_scores[improved] = proposal_scores[improved]
         return current, current_scores
 
-    def refine_samples(self, model, x, candidates):
+    def refine_samples(self, model, x, candidates, target_bits):
         if self.refinement_method == "coordinate_ascent":
-            return self.coordinate_ascent(model, x, candidates)
+            return self.coordinate_ascent(model, x, candidates, target_bits)
 
     def compute_loss(self, student, teacher, x, y, config, device):
         batch_size = config["batch_size"]
         seq_len = config["seqlen"]
-        
+        target_bits = config["target_bits"]
+
         B, x_len = x.shape[:2]
         candidates = self.sample_sequences(teacher, x, batch_size, seq_len, device)
-        refined_candidates, scores = self.refine_samples(teacher, x, candidates)
+        refined_candidates, scores = self.refine_samples(teacher, x, candidates, target_bits)
         best_idx = scores.argmax(dim=1)
         best_sequences = refined_candidates[torch.arange(B), best_idx]
 
@@ -209,6 +211,6 @@ class IRBCStrategy(DistillationStrategy):
         targets = best_sequences[:, 1:]
 
         loss = torch.nn.CrossEntropyLoss()
-        output = loss(pred_logits.reshape(-1, 2), targets.reshape(-1))
+        output = loss(pred_logits.reshape(-1, 2**target_bits), targets.reshape(-1))
 
         return output.mean()
