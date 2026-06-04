@@ -1,12 +1,13 @@
 import inspect
 
-from .strategies import DistillationStrategy, RADStrategy, VADStrategy, IRBCStrategy
+from .strategies import DistillationStrategy, RADStrategy, VADStrategy, IRBCStrategy, BSDStrategy
 from .trainer import DistillationTrainer
 
 STRATEGIES = {
     "rad": RADStrategy,
     "vad": VADStrategy,
     "irbc": IRBCStrategy,
+    "bsd": BSDStrategy,
 }
 
 

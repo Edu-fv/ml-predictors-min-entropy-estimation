@@ -9,6 +9,8 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+from .strategies import evaluate_teacher_scored_rollouts
+
 utils_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, utils_path)
 from utils.nice_log import nice_log
@@ -66,7 +68,7 @@ class DistillationTrainer:
             p.requires_grad = False
 
         optimizer = torch.optim.AdamW(student.parameters(), lr=lr)
-        scaler = torch.amp.GradScaler("cuda")
+        scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
 
         strategy_name = self.strategy.__class__.__name__
         print("-" * 40)
@@ -107,7 +109,7 @@ class DistillationTrainer:
                 ):
                     raise ValueError("Invalid values found in input data")
 
-                with torch.amp.autocast("cuda"):
+                with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
                     loss = self.strategy.compute_loss(
                         student, teacher, x, y, config, device
                     )
@@ -122,6 +124,13 @@ class DistillationTrainer:
                     optimizer.zero_grad()
 
                 epoch_loss += loss.item()
+
+            if len(train_data) % accumulation_steps != 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
 
             avg_loss = epoch_loss / max(len(train_data), 1)
             nice_log(f"Epoch {epoch + 1}/{epochs} - Loss: {avg_loss:.6f}")
@@ -175,6 +184,10 @@ class DistillationTrainer:
             config, **model_size_params, target_bits=target_bits
         )
 
+        if self.distillation_config.get("init_from_teacher", True):
+            student.load_state_dict(teacher.state_dict())
+            nice_log("Student initialised from teacher weights.")
+
         distill_time, distill_evals = self._train_student(
             module,
             student,
@@ -201,6 +214,13 @@ class DistillationTrainer:
             f"CE loss: {student_eval['bin_cross-entropy_loss']:.5f}"
         )
 
+        config["distillation_eval_batches"] = self.distillation_config.get(
+            "eval_batches", 4
+        )
+        rollout_diagnostics = evaluate_teacher_scored_rollouts(
+            teacher, student, eval_data, config, device
+        )
+
         total_train_samples = (
             int(run_params["num_bytes"] * run_params["train_ratio"])
             - int(np.ceil(run_params["seqlen"] / 8))
@@ -220,4 +240,5 @@ class DistillationTrainer:
             "training_data_size": total_train_samples * run_params["seqlen"],
             "steps_per_epoch": steps_per_epoch,
             "validation_steps": validation_steps,
+            **rollout_diagnostics,
         }

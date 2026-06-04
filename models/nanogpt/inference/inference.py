@@ -128,45 +128,40 @@ def autoregressive_inference(
     
     Returns:
         binary_predictions: Predicted bits
-        loss: Dummy loss (0.0 since we can't compute true cross-entropy for hard predictions)
+        loss: Mean closed-loop bit cross-entropy over the generated horizon
         correct: Updated correct count
         total: Updated total count
     """
-    target = y
     x_current = x.to(device)
-    predictions_sequence = []
+    target_decimal = y[:, -1]
+    target_bits_tensor = (
+        (target_decimal.unsqueeze(1) >> torch.arange(target_bits - 1, -1, -1, device=device))
+        & 1
+    ).long()
+    predicted_bits_sequence = []
+    step_losses = []
 
     for step in range(target_bits):
-        logits = model(x_current).logits
-        probs = torch.softmax(logits, dim=-1)
-        predicted_bits = torch.argmax(probs, dim=-1)
+        logits = model(x_current).logits[:, -1, :]
+        predicted_bit = torch.argmax(logits, dim=-1)
+        true_bit = target_bits_tensor[:, step]
 
-        # Shift sequence: remove first element, append new prediction
-        x_current = torch.cat([x_current[:, 1:], predicted_bits[:, -1:]], dim=1)
-        
-        predicted_bits_expanded = predicted_bits.unsqueeze(-1)
-        predictions_sequence.append(predicted_bits_expanded)
+        step_losses.append(loss_fn(logits, true_bit))
 
-    concatenated_bits = torch.cat(predictions_sequence, dim=-1)
-    
-    # Convert bit sequence to decimal indices
+        x_current = torch.cat([x_current[:, 1:], predicted_bit.unsqueeze(1)], dim=1)
+        predicted_bits_sequence.append(predicted_bit)
+
+    concatenated_bits = torch.stack(predicted_bits_sequence, dim=1)
     decimal_predictions = torch.sum(
         concatenated_bits
-        * 2 ** torch.arange(target_bits - 1, -1, -1, device=device).unsqueeze(0).unsqueeze(0),
+        * 2 ** torch.arange(target_bits - 1, -1, -1, device=device).unsqueeze(0),
         dim=-1,
     )
-    
-    # One-hot encode predictions
-    predictions = torch.nn.functional.one_hot(
-        decimal_predictions, num_classes=2**target_bits
-    ).to(torch.float)
-    
-    # Return dummy loss since we can't compute true cross-entropy for hard predictions
-    loss = torch.tensor(0.0, device=device)
 
-    correct, total = eval_multi(
-        decimal_predictions, target, target_bits, correct, total, config
-    )
+    loss = torch.stack(step_losses).mean()
+
+    correct += (decimal_predictions == target_decimal).sum().item()
+    total += target_decimal.size(0)
 
     binary_predictions = concatenated_bits.view(-1).cpu()
 

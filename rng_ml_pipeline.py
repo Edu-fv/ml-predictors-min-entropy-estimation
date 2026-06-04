@@ -75,12 +75,26 @@ def experimental_min_entropy(p_ml, target_bits=1):
 
 def write_results_to_csv(output_dict, results_dir):
     output_file = f"{results_dir}/results.csv"
+    header = list(output_dict.keys())
+
+    for candidate in ("results.csv", "results_ad.csv", "results_ad_v2.csv"):
+        candidate_file = f"{results_dir}/{candidate}"
+        if not os.path.isfile(candidate_file):
+            output_file = candidate_file
+            break
+        with open(candidate_file, newline="") as f:
+            reader = csv.reader(f)
+            existing_header = next(reader, None)
+        if existing_header == header:
+            output_file = candidate_file
+            break
+
     file_exists = os.path.isfile(output_file)
 
     with open(output_file, "a", newline="") as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(output_dict.keys())
+            writer.writerow(header)
         writer.writerow(output_dict.values())
 
 
@@ -177,10 +191,10 @@ class ModelRunner:
             "batch_size": 8,
             "model_size_parameters": lambda p: {
                 "block_size": p["seqlen"],
-                "n_embd": 256,   # embedding dimension
-                "n_layer": 3,    # transformer layers
-                "n_head": 4,     # attention heads
-                "dropout": 0.0,
+                "n_embd": p.get("nanogpt_n_embd", 256),
+                "n_layer": p.get("nanogpt_n_layer", 3),
+                "n_head": p.get("nanogpt_n_head", 4),
+                "dropout": p.get("nanogpt_dropout", 0.0),
             },
             "remove_keys": [],
         },
@@ -213,13 +227,14 @@ class ModelRunner:
         module = self._load_module()
         run_params = params.copy()
         
-        for key in self.config["remove_keys"]:
-            run_params.pop(key, None)
-        
         if run_params.get("batch_size") is None:
             run_params["batch_size"] = self.config["batch_size"]
         
         run_params["model_size_parameters"] = self.config["model_size_parameters"](run_params)
+        for key in self.config["remove_keys"]:
+            run_params.pop(key, None)
+        for key in ("nanogpt_n_embd", "nanogpt_n_layer", "nanogpt_n_head", "nanogpt_dropout"):
+            run_params.pop(key, None)
         
         if distillation_mode is not None:
             from distillation import get_strategy, DistillationTrainer
@@ -231,7 +246,8 @@ class ModelRunner:
 
 
 def main(model_param_dict, data_param_dict, model_name, hardware,
-         gpu_cooldown=0, distillation_mode=None, distillation_config=None):
+         gpu_cooldown=0, distillation_mode=None, distillation_config=None,
+         skip_nist=False):
     print("=" * 60)
     nice_log(f"Running model [{model_name}]", color="green")
     print(f"  Data: {model_param_dict['num_bytes']} bytes, "
@@ -272,13 +288,13 @@ def main(model_param_dict, data_param_dict, model_name, hardware,
         p_c_source = calculate_p_c(random_bytes)
         min_entropy_th = ar_min_entropy_limit(beta)
         
-        nist = NistEntropyAssessment(sample_target_file).start()
+        nist = None if skip_nist else NistEntropyAssessment(sample_target_file).start()
         ml_results = model_runner.run(
             model_param_dict,
             distillation_mode=distillation_mode,
             distillation_config=distillation_config,
         )
-        entropies_dict = nist.wait()
+        entropies_dict = {"nist_status": "skipped"} if skip_nist else nist.wait()
 
         base_result = {
             "model": model_name,
@@ -312,6 +328,27 @@ def main(model_param_dict, data_param_dict, model_name, hardware,
             base_result["tau_start"] = "-"
             base_result["tau_end"] = "-"
             base_result["tau_progression"] = "-"
+
+        if distillation_config is not None:
+            base_result["distillation_steps"] = distillation_config.get("num_steps", "-")
+            base_result["distillation_candidates"] = distillation_config.get("num_candidates", "-")
+            base_result["distillation_refinement_passes"] = distillation_config.get("refinement_passes", "-")
+            base_result["distillation_beam_width"] = distillation_config.get("beam_width", "-")
+            base_result["distillation_temperature"] = distillation_config.get("temperature", distillation_config.get("tau", "-"))
+            base_result["distillation_entropy_coef"] = distillation_config.get("entropy_coef", "-")
+            base_result["rad_baseline"] = distillation_config.get("baseline", "-")
+            base_result["vad_teacher_kl_coef"] = distillation_config.get("teacher_kl_coef", "-")
+            base_result["vad_straight_through"] = distillation_config.get("straight_through", "-")
+        else:
+            base_result["distillation_steps"] = "-"
+            base_result["distillation_candidates"] = "-"
+            base_result["distillation_refinement_passes"] = "-"
+            base_result["distillation_beam_width"] = "-"
+            base_result["distillation_temperature"] = "-"
+            base_result["distillation_entropy_coef"] = "-"
+            base_result["rad_baseline"] = "-"
+            base_result["vad_teacher_kl_coef"] = "-"
+            base_result["vad_straight_through"] = "-"
 
 
         ml_info = {k: v for k, v in ml_results.items()
@@ -428,11 +465,28 @@ def parse_arguments():
         help="Seconds to wait between runs for GPU cooldown (default: 0, use 180 for production)",
     )
     parser.add_argument(
+        "--skip_nist",
+        action="store_true",
+        help="Skip SP800-90B assessment for fast AD-only benchmarks.",
+    )
+    parser.add_argument(
+        "--nanogpt_n_embd", type=int, default=256, help="nanoGPT embedding size"
+    )
+    parser.add_argument(
+        "--nanogpt_n_layer", type=int, default=3, help="nanoGPT layer count"
+    )
+    parser.add_argument(
+        "--nanogpt_n_head", type=int, default=4, help="nanoGPT attention heads"
+    )
+    parser.add_argument(
+        "--nanogpt_dropout", type=float, default=0.0, help="nanoGPT dropout"
+    )
+    parser.add_argument(
         "--distillation_mode",
         type=str,
         default=None,
-        choices=["rad", "vad", "irbc"],
-        help="Distillation strategy: rad (REINFORCE), vad (Gumbel-Softmax), irbc (Behaviour Cloning)",
+        choices=["rad", "vad", "irbc", "bsd"],
+        help="Distillation strategy: rad, vad, irbc, or bsd",
     )
     parser.add_argument(
         "--distillation_steps",
@@ -451,6 +505,60 @@ def parse_arguments():
         type=int,
         default=None,
         help="Epochs for student distillation (default: same as --epochs)",
+    )
+    parser.add_argument(
+        "--distillation_candidates",
+        type=int,
+        default=4,
+        help="Candidate rollouts for IRBC refinement",
+    )
+    parser.add_argument(
+        "--distillation_beam_width",
+        type=int,
+        default=8,
+        help="Beam width for BSD teacher search",
+    )
+    parser.add_argument(
+        "--distillation_refinement_passes",
+        type=int,
+        default=1,
+        help="Coordinate-ascent passes for IRBC",
+    )
+    parser.add_argument(
+        "--distillation_temperature",
+        type=float,
+        default=1.0,
+        help="Sampling temperature for RAD/IRBC",
+    )
+    parser.add_argument(
+        "--distillation_entropy_coef",
+        type=float,
+        default=0.0,
+        help="Entropy bonus coefficient for RAD/VAD",
+    )
+    parser.add_argument(
+        "--distillation_eval_batches",
+        type=int,
+        default=4,
+        help="Eval batches used for AD rollout diagnostics",
+    )
+    parser.add_argument(
+        "--rad_baseline",
+        type=str,
+        default="teacher_greedy",
+        choices=["teacher_greedy", "batch_mean", "zero"],
+        help="Baseline for RAD policy-gradient advantages",
+    )
+    parser.add_argument(
+        "--vad_teacher_kl_coef",
+        type=float,
+        default=0.02,
+        help="Small KL anchor from VAD student policy to teacher policy",
+    )
+    parser.add_argument(
+        "--vad_soft_relaxation",
+        action="store_true",
+        help="Use soft Gumbel-Softmax in VAD instead of straight-through hard samples",
     )
     parser.add_argument(
         "--vad_tau_start",
@@ -563,6 +671,10 @@ if __name__ == "__main__":
         "evaluation_checkpoints": evaluation_checkpoints,
         "is_autoregressive": args.is_autoregressive,
         "evaluate_all_bits": args.evaluate_all_bits,
+        "nanogpt_n_embd": args.nanogpt_n_embd,
+        "nanogpt_n_layer": args.nanogpt_n_layer,
+        "nanogpt_n_head": args.nanogpt_n_head,
+        "nanogpt_dropout": args.nanogpt_dropout,
     }
 
     data_param_dict = {
@@ -581,6 +693,16 @@ if __name__ == "__main__":
     if args.distillation_mode is not None:
         distillation_config = {
             "num_steps": args.distillation_steps,
+            "num_candidates": args.distillation_candidates,
+            "refinement_passes": args.distillation_refinement_passes,
+            "beam_width": args.distillation_beam_width,
+            "temperature": args.distillation_temperature,
+            "tau": args.distillation_temperature,
+            "entropy_coef": args.distillation_entropy_coef,
+            "eval_batches": args.distillation_eval_batches,
+            "baseline": args.rad_baseline,
+            "teacher_kl_coef": args.vad_teacher_kl_coef,
+            "straight_through": not args.vad_soft_relaxation,
         }
         if args.distillation_lr is not None:
             distillation_config["learning_rate"] = args.distillation_lr
@@ -601,4 +723,5 @@ if __name__ == "__main__":
         gpu_cooldown=args.gpu_cooldown,
         distillation_mode=args.distillation_mode,
         distillation_config=distillation_config,
+        skip_nist=args.skip_nist,
     )

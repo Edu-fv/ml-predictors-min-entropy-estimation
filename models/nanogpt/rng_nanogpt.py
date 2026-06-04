@@ -141,7 +141,7 @@ def train_model(
         target_bits = 1
         
     loss_fn = torch.nn.CrossEntropyLoss()
-    scaler = torch.amp.GradScaler("cuda")
+    scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
 
     print("-" * 40)
     print("Training")
@@ -186,7 +186,7 @@ def train_model(
                 raise Exception("Invalid values found in input data")
 
             # Mixed precision training
-            with torch.amp.autocast("cuda"):
+            with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
                 output = model(x)
                 logits = output.logits.view(-1, 2**target_bits)
                 target = y.view(-1)
@@ -204,6 +204,13 @@ def train_model(
                 optimizer.zero_grad()
 
             epoch_loss += loss.item()
+
+        if len(data) % accumulation_steps != 0:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
 
     training_time = float(timer() - start) / 60
     nice_log(f"Training completed in {training_time:.2f} minutes")
